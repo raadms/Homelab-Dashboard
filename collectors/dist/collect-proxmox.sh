@@ -137,9 +137,10 @@ finish() {
 # Read-only. Lists the cluster, every VM/LXC (running or stopped), their configs
 # (secrets redacted), guest-agent network info for running VMs, and — inside
 # running LXCs only — containers, listening ports and services via `pct exec`.
-# VMs are NOT entered: run collect-guest.sh inside each VM yourself.
+# Running Linux VMs with the QEMU guest agent are inspected the same way via
+# `qm guest exec`; VMs without the agent are listed with their config only.
 #
-# Options (env): SKIP_LXC_EXEC=1 to not run anything inside LXCs.
+# Options (env): SKIP_LXC_EXEC=1 / SKIP_VM_EXEC=1 to not run anything inside guests.
 #                CMD_TIMEOUT=20 per-command timeout in seconds.
 
 init_out proxmox
@@ -162,25 +163,8 @@ run_sh network_config 'cat /etc/network/interfaces; ls /etc/network/interfaces.d
 run_sh tasks_recent 'pvesh get /nodes/$(hostname)/tasks --limit 200 --output-format json'
 
 NODE="$(hostname)"
-# VMs on this node
-for id in $(qm list 2>/dev/null | awk 'NR>1 {print $1}'); do
-  run "qm_${id}_config" qm config "$id"
-  run "qm_${id}_status" qm status "$id" --verbose
-  if qm status "$id" 2>/dev/null | grep -q running; then
-    # Read-only guest-agent queries; fail fast when no agent.
-    CMD_TIMEOUT=8 run "qm_${id}_agent_net" qm guest cmd "$id" network-get-interfaces
-    CMD_TIMEOUT=8 run "qm_${id}_agent_os" qm guest cmd "$id" get-osinfo
-    CMD_TIMEOUT=8 run "qm_${id}_agent_host" qm guest cmd "$id" get-host-name
-  fi
-done
-
-# LXCs on this node
-for id in $(pct list 2>/dev/null | awk 'NR>1 {print $1}'); do
-  run "pct_${id}_config" pct config "$id"
-  run "pct_${id}_status" pct status "$id" --verbose
-  if [ "${SKIP_LXC_EXEC:-0}" != 1 ] && pct status "$id" 2>/dev/null | grep -q running; then
-    # Everything here is read-only. `sh -c` inside the container; tools may be missing.
-    CMD_TIMEOUT=25 run "pct_${id}_inside" pct exec "$id" -- sh -c '
+# Read-only commands run inside guests (LXC via pct exec, VMs via the QEMU guest agent).
+INSIDE='
       echo "## hostname"; hostname
       echo "## os"; cat /etc/os-release 2>/dev/null | head -3
       echo "## ip"; ip -br addr 2>/dev/null || ifconfig 2>/dev/null
@@ -195,6 +179,30 @@ for id in $(pct list 2>/dev/null | awk 'NR>1 {print $1}'); do
       (curl -s -m 4 http://127.0.0.1:2019/config/ || wget -qO- -T 4 http://127.0.0.1:2019/config/) 2>/dev/null
       echo "## nginx"; nginx -T 2>/dev/null | head -2000
     '
+# VMs on this node
+for id in $(qm list 2>/dev/null | awk 'NR>1 {print $1}'); do
+  run "qm_${id}_config" qm config "$id"
+  run "qm_${id}_status" qm status "$id" --verbose
+  if qm status "$id" 2>/dev/null | grep -q running; then
+    # Read-only guest-agent queries; fail fast when no agent.
+    CMD_TIMEOUT=8 run "qm_${id}_agent_net" qm guest cmd "$id" network-get-interfaces
+    CMD_TIMEOUT=8 run "qm_${id}_agent_os" qm guest cmd "$id" get-osinfo
+    CMD_TIMEOUT=8 run "qm_${id}_agent_host" qm guest cmd "$id" get-host-name
+    # Look inside Linux VMs through the guest agent (read-only commands only).
+    if [ "${SKIP_VM_EXEC:-0}" != 1 ] && ! qm config "$id" 2>/dev/null | grep -q '^ostype: win' \
+       && qm agent "$id" ping >/dev/null 2>&1; then
+      CMD_TIMEOUT=40 run "qm_${id}_inside" qm guest exec "$id" --timeout 35 -- sh -c "$INSIDE"
+    fi
+  fi
+done
+
+# LXCs on this node
+for id in $(pct list 2>/dev/null | awk 'NR>1 {print $1}'); do
+  run "pct_${id}_config" pct config "$id"
+  run "pct_${id}_status" pct status "$id" --verbose
+  if [ "${SKIP_LXC_EXEC:-0}" != 1 ] && pct status "$id" 2>/dev/null | grep -q running; then
+    # Everything here is read-only. `sh -c` inside the container; tools may be missing.
+    CMD_TIMEOUT=25 run "pct_${id}_inside" pct exec "$id" -- sh -c "$INSIDE"
   fi
 done
 

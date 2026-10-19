@@ -207,8 +207,11 @@ def source_collected(extracted_dirs):
                 if kind == "qm":
                     g["agent_ips"] = parsers.agent_ips(R(f"qm_{vmid}_agent_net"))
                     g["agent_enabled"] = cfgd.get("agent", "").startswith("1")
+                    ge = parsers._json(R(f"qm_{vmid}_inside")) or {}
+                    inside = parsers.sections(ge.get("out-data", "") if isinstance(ge, dict) else "")
                 else:
                     inside = parsers.sections(R(f"pct_{vmid}_inside"))
+                if inside is not None:
                     if inside:
                         g["inside"] = dict(
                             ips=parsers.ips_from_ip_brief(inside.get("ip", "")),
