@@ -1,0 +1,1 @@
+{"version":"0.0.1","configurations":[{"name":"dashboard","runtimeExecutable":"python3","runtimeArgs":["-m","server.app","--port","8088"],"port":8088}]}

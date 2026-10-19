@@ -1,0 +1,32 @@
+{
+  "_comment": "Facts stated by the owner. They are starting points, labelled source=user-provided, and are confirmed or contradicted by collected evidence.",
+  "cluster": "safrani-cluster",
+  "proxmox_nodes": [
+    {"name": "pve", "ip": "10.10.10.10"},
+    {"name": "pve-gtx", "ip": "10.10.10.11"}
+  ],
+  "domain_suffix": "safrani.co",
+  "known_domains": [
+    "ha.safrani.co", "nas.safrani.co", "frigate.safrani.co", "frigate-gtx.safrani.co",
+    "proxy.safrani.co", "plex.safrani.co", "sonarr.safrani.co", "arr.safrani.co", "unifi.safrani.co"
+  ],
+  "candidate_names": [
+    "pve", "pve-gtx", "proxmox", "truenas", "jellyfin", "radarr", "prowlarr", "bazarr", "lidarr",
+    "qbittorrent", "overseerr", "jellyseerr", "tautulli", "grafana", "portainer", "pikvm", "idrac",
+    "media", "caddy", "home", "z2m", "zigbee", "scrypted", "music", "nvr", "protect", "vault", "immich",
+    "nextcloud", "uptime", "status", "dash", "dashboard", "pbs", "backup", "adguard", "pihole", "dns"
+  ],
+  "networks": [
+    {"vlan": 1,   "subnet": "10.10.1.0/24",  "name": "Default / infrastructure"},
+    {"vlan": 10,  "subnet": "10.10.10.0/24", "name": "Servers"},
+    {"vlan": 20,  "subnet": "10.10.20.0/24", "name": "Storage (secure)"},
+    {"vlan": 21,  "subnet": "10.10.21.0/24", "name": "Storage (media)"},
+    {"vlan": 30,  "subnet": "10.10.30.0/24", "name": "Apps"},
+    {"vlan": 35,  "subnet": "10.10.35.0/24", "name": "Claude / tooling"},
+    {"vlan": 40,  "subnet": "10.10.40.0/24", "name": "Media"},
+    {"vlan": 50,  "subnet": "50.50.50.0/24", "name": "Proxy / DMZ"},
+    {"vlan": 60,  "subnet": "10.10.60.0/24", "name": "IoT"},
+    {"vlan": 200, "subnet": "10.10.200.0/24","name": "Cameras / NVR"}
+  ],
+  "_networks_note": "Subnets and VLAN IDs were observed from UniFi client data (HA integration). Names are inferred from the clients seen on each; the UniFi collector replaces them with the real network names."
+}
