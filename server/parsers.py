@@ -129,7 +129,8 @@ def _labels(raw):
     if isinstance(raw, dict):
         return raw
     out = {}
-    for part in (raw or "").split(","):
+    # Split only on commas that start a new key=value (values may contain commas).
+    for part in re.split(r",(?=[A-Za-z0-9_.\-/]+=)", raw or ""):
         if "=" in part:
             k, v = part.split("=", 1)
             out[k.strip()] = v.strip()
@@ -177,6 +178,8 @@ def containers(ps_text, engine):
             compose_service=labels.get("com.docker.compose.service"),
             compose_file=labels.get("com.docker.compose.project.config_files"),
             proxy_labels={k: v for k, v in labels.items() if k.startswith(("traefik.", "caddy"))},
+            traefik_routes=traefik_label_routes(labels),
+            network=c.get("Networks", ""),
         ))
     return out
 
@@ -440,3 +443,26 @@ def sections(text):
         elif cur is not None:
             out[cur].append(line)
     return {k: "\n".join(v) for k, v in out.items()}
+
+
+def traefik_label_routes(labels):
+    """Traefik docker-provider labels -> [(router, hosts, paths, port)]."""
+    if str(labels.get("traefik.enable", "true")).lower() == "false":
+        return []
+    routers = {}
+    for k, v in labels.items():
+        m = re.match(r"^traefik\.http\.routers\.([^.]+)\.rule$", k)
+        if m:
+            routers[m.group(1)] = v
+    ports = {m.group(1): v for k, v in labels.items() if (m := re.match(r"^traefik\.http\.services\.([^.]+)\.loadbalancer\.server\.port$", k))}
+    out, seen = [], set()
+    for name, rule in routers.items():
+        hosts = re.findall(r"Host\(`([^`]+)`\)", rule)
+        paths = re.findall(r"PathPrefix\(`([^`]+)`\)", rule) or ["/"]
+        svc = labels.get(f"traefik.http.routers.{name}.service")
+        port = ports.get(svc) if svc else (next(iter(ports.values())) if len(ports) == 1 else None)
+        key = (tuple(hosts), tuple(paths))
+        if hosts and key not in seen:
+            seen.add(key)
+            out.append(dict(router=name, hosts=hosts, paths=paths, port=port))
+    return out

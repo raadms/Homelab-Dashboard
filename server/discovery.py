@@ -254,6 +254,7 @@ class Builder:
         self.apps, self.domains, self.routes, self.issues = {}, {}, [], []
         self.networks = [dict(n, source="observed client VLANs (names inferred)") for n in seed.get("networks", [])]
         self.dhcp_names = set()
+        self.extra_domains = set()
         self.ip_index = {}   # ip -> {"device":id, "workload":id, "node":id}
         self.sources = []
 
@@ -415,7 +416,7 @@ class Builder:
         local = next((n for n in self.nodes.values() if n["name"] == run["hostname"] or n["name"] == run["hostname"].split(".")[0]), None)
         if local:
             local.update(pveversion=run.get("pveversion"), os=run.get("os"), host_services=run.get("services"),
-                         failed_units=run.get("failed_units"))
+                         failed_units=run.get("failed_units"), listeners=run.get("listeners"))
             self.add_host_runtime(run, host_ref=dict(node=local["id"]), host_ip=local.get("ip"), src=src, label=local["name"])
         # guest configs (present on the node that owns them)
         for vmid, g in (run.get("guests") or {}).items():
@@ -436,8 +437,10 @@ class Builder:
                 fake = dict(listeners=g["inside"]["listeners"], containers=g["inside"]["containers"],
                             proxy_routes=g["inside"]["proxy_routes"], services=g["inside"]["services"])
                 w["services"] = g["inside"]["services"]
+                w["guest_collected_at"] = run["at"]
+                w["guest_collected_via"] = "pct exec" if g["type"] == "lxc" else "QEMU guest agent"
                 self.add_host_runtime(fake, host_ref=dict(workload=w["id"], node=w["node_id"]),
-                                      host_ip=(w["ips"] or [None])[0], src=src + f" (pct exec {vmid})", label=w.get("name"))
+                                      host_ip=(w["ips"] or [None])[0], src=src + (f" (pct exec {vmid})" if g["type"] == "lxc" else f" (guest agent, VM {vmid})"), label=w.get("name"))
 
     def link_workloads_to_devices(self):
         mac_to_dev = {d.get("mac"): d for d in self.devices.values() if d.get("mac")}
@@ -495,7 +498,8 @@ class Builder:
             key = catalog.match(catalog.IMAGE_PATTERNS, c["image"]) or catalog.match(catalog.IMAGE_PATTERNS, c["name"])
             inf = catalog.info(key) if key else None
             web_ports = [p for p in c["ports"] if p["proto"] == "tcp" and p["host_port"] not in catalog.NON_HTTP_PORTS]
-            if not inf and not web_ports:
+            troutes = c.get("traefik_routes") or []
+            if not inf and not web_ports and not troutes:
                 continue  # sidecar / db / worker: shown under the container, not as an app
             aid = eid("app", "ct", host_key, c["name"])
             a = self.app(aid, name=(inf or {}).get("name") or c["name"], category=(inf or {}).get("category") or "Other",
@@ -503,6 +507,19 @@ class Builder:
                          location=dict(loc, container_id=cid, compose_project=c.get("compose_project"), compose_service=c.get("compose_service")),
                          runtime=dict(state=c["state"], status=c.get("status"), restarts=c.get("restarts"), started_at=c.get("started_at"), health=c.get("health")),
                          sources=src, confidence="high" if inf else "medium", sensitive=(inf or {}).get("sensitive", False))
+            for tr in troutes:
+                for h in tr["hosts"]:
+                    if "." not in h:
+                        a["notes"].append(f"Traefik router '{tr['router']}' uses bare host '{h}' (no domain): reachable only if something resolves that name.")
+                        continue
+                    path = tr["paths"][0].rstrip("/") + "/"
+                    up = f"{c['name']}:{tr['port']}" if tr.get("port") else c["name"]
+                    self.endpoint(a, f"https://{h}{path}", "domain", "configured", src + " (Traefik docker label)",
+                                  proxy="traefik", proxy_ip=host_ip, upstream=up, path_based=path != "/")
+                    self.extra_domains.add(h)
+                self.routes.append(dict(hosts=tr["hosts"], paths=tr["paths"], action="reverse_proxy", upstreams=[f"{c['name']}:{tr.get('port') or '?'}"],
+                                        proxy="traefik", proxy_source="docker labels", proxy_host_id=host_key, proxy_ip=host_ip,
+                                        proxy_label=label, source=src, app_id=aid, upstream_app=aid, upstream_status="matched", prelinked=True))
             for p in web_ports:
                 published[p["host_port"]] = aid
                 if host_ip:
@@ -522,6 +539,8 @@ class Builder:
             key = catalog.match(catalog.PROCESS_PATTERNS, l["process"] or "")
             if not key:
                 continue  # unknown process on an unknown port: not assumed to be a web app
+            if key == "proxmox" and not host_ref.get("workload"):
+                continue  # the node's own Proxmox UI is represented by the node app
             inf = catalog.info(key)
             aid = eid("app", "svc", host_key, key)
             a = self.app(aid, name=inf["name"], category=inf["category"], icon=inf["icon"], purpose=inf["purpose"],
@@ -611,6 +630,9 @@ class Builder:
                 if not d.get("ip") or d.get("ipv6_only"):
                     continue
                 where = self.ip_index.get(d["ip"], {})
+                wl = self.workloads.get(where.get("workload")) or {}
+                if wl.get("guest_collected_at") and any(a["location"].get("workload_id") == wl["id"] and a.get("catalog_key") == key for a in self.apps.values()):
+                    break  # real runtime evidence already produced this app
                 aid = eid("app", "dev", d["id"].split(":", 1)[1], key)
                 nm = inf["name"] if key not in ("truenas", "homeassistant", "caddy") else f"{inf['name']} ({d.get('name') or d.get('hostname')})"
                 a = self.app(aid, name=nm, category=inf["category"], icon=inf["icon"], purpose=inf["purpose"], catalog_key=key,
@@ -645,7 +667,7 @@ class Builder:
                          runtime=dict(state=n.get("status") or "unknown"), sources=n["sources"][0],
                          confidence="high" if n.get("verified") else "medium", sensitive=True)
             if n.get("ip"):
-                st = "discovered" if any(l.get("process") == "pveproxy" for l in (n.get("listeners") or [])) else "inferred"
+                st = "discovered" if any((l.get("process") or "").startswith("pveproxy") for l in (n.get("listeners") or [])) else "inferred"
                 self.endpoint(a, f"https://{n['ip']}:8006/", "ip", st, "Proxmox default port 8006", ip=n["ip"])
 
     # ---------------------------------------------------------------- DNS + routes
@@ -658,6 +680,8 @@ class Builder:
                     by_upstream[f"{e['ip']}:{e['port']}"] = a
         for r in self.routes:
             r["id"] = "rt:" + hashlib.sha1(json.dumps([r.get("hosts"), r.get("paths"), r.get("upstreams"), r.get("proxy_ip")]).encode()).hexdigest()[:10]
+            if r.get("prelinked"):
+                continue
             r["upstream_status"] = "unknown"
             for up in r.get("upstreams") or []:
                 hostport = up.split("/")[0]
@@ -736,7 +760,8 @@ class Builder:
                 target = same[0] if same else None
             elif key == "caddy":
                 # the proxy's own name (proxy.safrani.co): it is the Caddy host itself
-                target = next((a for a in self.apps.values() if a["location"].get("device_id") == proxy_dev["id"] and a.get("catalog_key") == "caddy"), None)
+                target = next((a for a in self.apps.values() if a.get("catalog_key") == "caddy"
+                               and (a["location"].get("device_id") == proxy_dev["id"] or a["location"].get("host_ip") == proxy_dev.get("ip"))), None)
             if target is None:
                 inf = catalog.info(key) if key else None
                 dev = self.devices.get(where.get("device")) or {}
@@ -754,9 +779,45 @@ class Builder:
 
     # ---------------------------------------------------------------- reconciliation
     def reconcile(self, dns, ha):
+        # DNS vs proxy-route consistency: where should each routed name point?
+        expect = {}
+        for a in self.apps.values():
+            for e in a["endpoints"]:
+                if e["kind"] == "domain" and e.get("proxy_ip") and e.get("proxy") in ("traefik", "caddy", "nginx"):
+                    expect.setdefault(e["host"], (e["proxy_ip"], e["proxy"], a))
+        groups = {}
+        for host, (pip, proxy, a) in expect.items():
+            rec = self.domains.get(host) or {}
+            got = rec.get("addresses") or []
+            if not rec.get("ok"):
+                groups.setdefault(("nodns", pip, proxy), []).append(host)
+            elif pip not in got:
+                groups.setdefault(("mismatch", pip, proxy, tuple(got)), []).append(host)
+        self.dns_checked = set()
+        for key, hosts in groups.items():
+            hosts = sorted(hosts)
+            self.dns_checked |= set(hosts)
+            pip, proxy = key[1], key[2]
+            where = self.ip_index.get(pip, {})
+            wl = self.workloads.get(where.get("workload")) or {}
+            hostname = f"{wl.get('kind', '').upper()} {wl.get('vmid')} {wl.get('name')}" if wl else pip
+            if key[0] == "nodns":
+                self.issue("medium", "route-without-dns", f"{len(hosts)} {proxy} route(s) on {hostname} have no DNS record",
+                           [f"{h}: NXDOMAIN, routed by {proxy} on {pip}" for h in hosts],
+                           f"Add local DNS records pointing these names to {pip} (or remove the unused routes).",
+                           ref=f"nodns:{pip}", hypothesis="The apps are configured but were never given DNS names, so they are only reachable by IP.")
+            else:
+                got = key[3]
+                outside = all(not any(ip_in(g, n["subnet"]) for n in self.networks) for g in got)
+                self.issue("high" if outside else "medium", "stale-dns" if outside else "dns-mismatch",
+                           f"{len(hosts)} name(s) routed by {proxy} on {hostname} resolve to {', '.join(got)} instead of {pip}",
+                           [f"{h} → {', '.join(got)} (expected {pip})" for h in hosts],
+                           f"Update these local DNS records to {pip}.", ref=f"dnsmm:{pip}:{','.join(got)}",
+                           hypothesis=("Old address of this host from a previous network layout." if outside else
+                                       "Points at a different host; the route there may be missing, so requests can fail or reach the wrong app."))
         known = {d.get("ip") for d in self.devices.values()} | {n.get("ip") for n in self.nodes.values()} | set(self.ip_index)
         for name, rec in self.domains.items():
-            if not rec.get("ok") or rec.get("kind") == "dhcp-hostname":
+            if not rec.get("ok") or rec.get("kind") == "dhcp-hostname" or name in self.dns_checked:
                 continue
             for ip in rec["addresses"]:
                 inside = any(ip_in(ip, n["subnet"]) for n in self.networks)
@@ -766,6 +827,13 @@ class Builder:
                                [f"DNS {name} → {ip} ({rec['source']})", "No UniFi network/VLAN contains this address"],
                                "Check the local DNS record in UniFi (Settings → Routing → DNS) and update or delete it.",
                                ref="dns:" + name, hypothesis="Left over from an older network layout (192.168.50.x).")
+                elif ip in self.ip_index and self.workloads.get(self.ip_index[ip].get("workload"), {}).get("status") == "running":
+                    if dev and not dev.get("online"):
+                        w = self.workloads[self.ip_index[ip]["workload"]]
+                        self.issue("info", "unifi-stale", f"UniFi lists {ip} offline, but {w['kind'].upper()} {w['vmid']} {w.get('name')} is running there",
+                                   [f"Proxmox: {w['kind']} {w['vmid']} status=running, IP {ip}", f"UniFi client last changed {dev.get('last_changed')}"],
+                                   "No action needed for the service; UniFi's view of this client is stale (e.g. the guest is quiet on the network or its MAC changed).",
+                                   ref="unifi-stale:" + ip)
                 elif dev and not dev.get("online"):
                     self.issue("medium", "dns-to-offline", f"{name} points to {ip}, which UniFi shows offline",
                                [f"DNS {name} → {ip}", f"UniFi client {dev.get('name') or dev.get('mac')} last changed {dev.get('last_changed')} (offline)"],
@@ -855,7 +923,7 @@ def build(cfg, data_dir):
     with open(os.path.join(ROOT, "config", "seed.json")) as f:
         seed = json.load(f)
     b = Builder(seed)
-    b.extra_domains = set(seed.get("known_domains", []))
+    b.extra_domains |= set(seed.get("known_domains", []))
     suffix = seed.get("domain_suffix")
     started = now()
 
