@@ -105,7 +105,10 @@ HOSTNAME_PATTERNS = [(re.compile(p, re.I), k) for p, k in [
     (r"^sonarr", "sonarr"), (r"^radarr", "radarr"), (r"^prowlarr", "prowlarr"), (r"^jellyfin", "jellyfin"),
     (r"^unifi", "unifi"), (r"^pve|proxmox", "proxmox"), (r"truenas|^nas\b", "truenas"), (r"pikvm", "pikvm"),
     (r"idrac", "idrac"), (r"^proxy|caddy", "caddy"), (r"wled", "wled"), (r"slzb", "slzb"),
-    (r"thread-route|otbr", "otbr"), (r"^arr\b", None),
+    (r"thread-route|otbr", "otbr"), (r"^scrypted", "scrypted"), (r"^uptime|^status$", "uptime-kuma"),
+    (r"^grafana", "grafana"), (r"^portainer", "portainer"), (r"^overseerr", "overseerr"), (r"^jellyseerr", "jellyseerr"),
+    (r"^qbit|^torrent", "qbittorrent"), (r"^pbs|^backup", "pbs"), (r"^adguard", "adguard"), (r"^pihole", "pihole"),
+    (r"^vault", "vaultwarden"), (r"^immich|^photos", "immich"), (r"^nextcloud|^cloud$", "nextcloud"), (r"^arr\b", None),
 ]]
 
 

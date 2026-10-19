@@ -731,6 +731,9 @@ class Builder:
             if not proxy_dev:
                 same = [a for a in cands if key and a.get("catalog_key") == key]
                 target = same[0] if same else None
+            elif key == "caddy":
+                # the proxy's own name (proxy.safrani.co): it is the Caddy host itself
+                target = next((a for a in self.apps.values() if a["location"].get("device_id") == proxy_dev["id"] and a.get("catalog_key") == "caddy"), None)
             if target is None:
                 inf = catalog.info(key) if key else None
                 dev = self.devices.get(where.get("device")) or {}

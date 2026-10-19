@@ -1,0 +1,38 @@
+# systemd unit for the homelab dashboard.
+# Install (on the target host, as root):
+#   useradd --system --home /opt/homelab-dashboard --shell /usr/sbin/nologin homelab-dash
+#   cp deploy/homelab-dashboard.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now homelab-dashboard
+[Unit]
+Description=Homelab dashboard (read-only discovery, health checks, digest)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab-dash
+Group=homelab-dash
+WorkingDirectory=/opt/homelab-dashboard
+Environment=DASH_DATA=/var/lib/homelab-dashboard
+Environment=DASH_QUIET=1
+ExecStart=/usr/bin/python3 -m server.app
+Restart=on-failure
+RestartSec=5
+# Hardening: the app only needs to read its code, write its data dir and open outbound sockets.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/homelab-dashboard
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
