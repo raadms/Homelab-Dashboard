@@ -23,7 +23,7 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from . import catalog, parsers
+from . import catalog, live, parsers
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -379,7 +379,7 @@ class Builder:
             self.index_ip(n["ip"], node=nid)
 
     def add_proxmox_run(self, run):
-        src = f"collect-proxmox@{run['hostname']} {run['at']}"
+        src = (f"Proxmox API {run['at']}" if run.get("live") else f"collect-proxmox@{run['hostname']} {run['at']}")
         res = run.get("cluster_resources") or []
         for r in res:
             if r.get("type") == "node":
@@ -468,7 +468,7 @@ class Builder:
 
     # ---------------------------------------------------------------- runtime on a host
     def add_guest_run(self, run):
-        src = f"collect-guest@{run['hostname']} {run['at']}"
+        src = (f"Portainer API {run['at']}" if run.get("live") else f"collect-guest@{run['hostname']} {run['at']}")
         ips = [i["ip"] for i in run.get("ips", [])]
         ref = {}
         for ip in ips:
@@ -958,6 +958,10 @@ def build(cfg, data_dir):
                 b.unifi_dns = getattr(b, "unifi_dns", []) + [dict(name=rec["key"], type=rec.get("record_type"), value=rec.get("value"), enabled=rec.get("enabled"))]
     b.sources.append(dict(name="Collector results (imported)", status=col["status"], at=started,
                           detail=f"{len(col['runs'])} runs: " + ", ".join(f"{r['collector']}@{r['hostname']}" for r in col["runs"])))
+    pst, api_runs = live.proxmox([n["ip"] for n in seed.get("proxmox_nodes", [])])
+    dst, docker_hosts = live.portainer()
+    b.sources += [pst, dst]
+    col["runs"] = live.merge_runs(col["runs"], api_runs, docker_hosts)
     b.add_seed_nodes()
     for r in col["runs"]:
         if r["collector"] == "proxmox":
