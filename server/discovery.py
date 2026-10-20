@@ -498,6 +498,10 @@ class Builder:
             key = catalog.match(catalog.IMAGE_PATTERNS, c["image"]) or catalog.match(catalog.IMAGE_PATTERNS, c["name"])
             inf = catalog.info(key) if key else None
             web_ports = [p for p in c["ports"] if p["proto"] == "tcp" and p["host_port"] not in catalog.NON_HTTP_PORTS]
+            if key in ("traefik", "caddy", "nginx"):
+                web_ports = []  # proxy entry ports answer 404 without a Host header; their UIs come from routes
+            elif inf and inf.get("port") and any(p["container_port"] == inf["port"] for p in web_ports):
+                web_ports = [p for p in web_ports if p["container_port"] == inf["port"]]  # e.g. Portainer 9443, not its 8000 tunnel
             troutes = c.get("traefik_routes") or []
             if not inf and not web_ports and not troutes:
                 continue  # sidecar / db / worker: shown under the container, not as an app
@@ -546,6 +550,8 @@ class Builder:
             a = self.app(aid, name=inf["name"], category=inf["category"], icon=inf["icon"], purpose=inf["purpose"],
                          catalog_key=key, location=loc, runtime=dict(state="running", process=l["process"]),
                          sources=src, confidence="high", sensitive=inf["sensitive"])
+            if key in ("traefik", "caddy", "nginx"):
+                continue  # see above: a bare proxy port is not an app UI
             if host_ip and inf["scheme"]:
                 scheme = inf["scheme"] if l["port"] == inf["port"] else ("https" if l["port"] in (443, 8443, 8006, 8007, 9443) else "http")
                 self.endpoint(a, f"{scheme}://{host_ip}:{l['port']}{inf['path'] if l['port'] == inf['port'] else '/'}",
