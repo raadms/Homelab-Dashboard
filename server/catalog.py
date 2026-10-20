@@ -60,11 +60,23 @@ APPS = {
     "wled":         ("WLED", "Home", "wled", "LED controller", "http", 80, "/"),
     "slzb":         ("SLZB-06", "Home", "zigbee2mqtt", "Zigbee coordinator/router", "http", 80, "/"),
     "hikvision":    ("Hikvision camera", "Security", "hikvision", "IP camera / NVR", "http", 80, "/"),
-    "otbr":         ("OpenThread Border Router", "Home", "openthread", "Thread border router", "http", 8081, "/"),
+    "otbr":         ("OpenThread Border Router", "Home", "thread", "Thread border router", "http", 8081, "/"),
     "music-assistant":("Music Assistant", "Media", "music-assistant", "Music server", "http", 8095, "/"),
     "code-server":  ("code-server", "Development", "code", "VS Code in the browser", "http", 8443, "/"),
     "ollama":       ("Ollama", "AI", "ollama", "Local LLM runtime", "http", 11434, "/"),
     "open-webui":   ("Open WebUI", "AI", "open-webui", "LLM chat UI", "http", 8080, "/"),
+    "heimdall":     ("Heimdall", "Productivity", "heimdall", "Start page", "http", 80, "/"),
+    "homepage":     ("Homepage", "Productivity", "homepage", "Start page", "http", 3000, "/"),
+    "babybuddy":    ("Baby Buddy", "Home", "babybuddy", "Baby care tracker", "http", 80, "/"),
+    "pairdrop":     ("PairDrop", "Productivity", "pairdrop", "Local file sharing", "http", 3000, "/"),
+    "it-tools":     ("IT Tools", "Productivity", "it-tools", "Developer utilities", "http", 80, "/"),
+    "collabora":    ("Collabora Online", "Productivity", "collabora-online", "Office documents", "https", 9980, "/"),
+    "librespeed":   ("LibreSpeed", "Network", "librespeed", "Speed test", "http", 80, "/"),
+    "openspeedtest":("OpenSpeedTest", "Network", "openspeedtest", "Speed test", "http", 3000, "/"),
+    "ytdl-sub":     ("ytdl-sub", "Media", "youtube-dl", "YouTube downloader", "http", 8443, "/"),
+    "seerr":        ("Seerr", "Media", "overseerr", "Media requests", "http", 5055, "/"),
+    "mailrise":     ("Mailrise", "Monitoring", "mailrise", "SMTP to notifications", None, 8025, None),
+    "ha-dashboard": ("HA Dashboard", "Home", "home-assistant", "Custom Home Assistant dashboard", "http", 3000, "/"),
 }
 
 # Ports that are management/admin surfaces: only TCP/TLS checks, never repeated HTTP GETs.
@@ -88,7 +100,10 @@ IMAGE_PATTERNS = [(re.compile(p, re.I), k) for p, k in [
     (r"vaultwarden", "vaultwarden"), (r"nextcloud", "nextcloud"), (r"immich-server", "immich"),
     (r"paperless", "paperless"), (r"mosquitto", "mosquitto"), (r"zigbee2mqtt", "zigbee2mqtt"),
     (r"scrypted", "scrypted"), (r"music-assistant", "music-assistant"), (r"code-server", "code-server"),
-    (r"ollama", "ollama"), (r"open-webui", "open-webui"),
+    (r"ollama", "ollama"), (r"open-webui", "open-webui"), (r"heimdall", "heimdall"), (r"gethomepage", "homepage"),
+    (r"babybuddy", "babybuddy"), (r"pairdrop", "pairdrop"), (r"it-tools", "it-tools"), (r"collabora", "collabora"),
+    (r"librespeed", "librespeed"), (r"openspeedtest", "openspeedtest"), (r"ytdl-sub", "ytdl-sub"), (r"seerr-team/seerr", "seerr"),
+    (r"mailrise", "mailrise"), (r"ha-dashboard|ha-mobile", "ha-dashboard"),
 ]]
 
 PROCESS_PATTERNS = [(re.compile(p, re.I), k) for p, k in [

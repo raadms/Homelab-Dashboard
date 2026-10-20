@@ -99,7 +99,10 @@ function icon(a, cls = "") {
 }
 document.addEventListener("error", (e) => {
   const img = e.target;
-  if (img.tagName === "IMG" && img.dataset.fallback !== undefined) { const s = img.parentElement; s.textContent = img.dataset.fallback; }
+  if (img.tagName !== "IMG" || img.dataset.fallback === undefined) return;
+  // dashboard-icons ships some icons only as PNG: try that before falling back to initials
+  if (img.src.includes("/dashboard-icons/svg/")) { img.src = img.src.replace("/svg/", "/png/").replace(/\.svg$/, ".png"); return; }
+  const s = img.parentElement; s.textContent = img.dataset.fallback;
 }, true);
 
 // ------------------------------------------------------------------ state
@@ -214,7 +217,7 @@ function renderResults() {
 
 // ------------------------------------------------------------------ shell
 const NAV = [
-  ["overview", "Overview", "home"], ["apps", "Apps", "grid"], ["infra", "Infrastructure", "tree"], ["network", "DNS & proxy", "globe"],
+  ["overview", "Home", "home"], ["apps", "Apps", "grid"], ["infra", "Infrastructure", "tree"], ["network", "DNS & proxy", "globe"],
   ["devices", "Devices", "dev"], ["digest", "Digest", "digest"], ["diag", "Diagnostics", "pulse"], ["admin", "Admin", "gear"],
 ];
 const TABBAR = ["overview", "apps", "infra", "network", "digest", "admin"];
@@ -228,7 +231,7 @@ function shell(inner) {
   <main>
     <div class="top">
       <div class="brand-m"><img src="icon.svg" alt="" width="26" height="26">Homelab</div>
-      <div class="search" role="search">${svg("search")}<input id="q" type="search" placeholder="Search apps, devices, domains, IPs, containers…" autocomplete="off" aria-label="Search" value="${esc(S.q)}"><div id="results" class="results" hidden></div></div>
+      <div class="search" role="search">${svg("search")}<input id="q" type="search" placeholder="Search apps, devices, domains, IPs, containers…" autocomplete="off" aria-label="Search" value="${esc(S.q)}"><kbd>/</kbd><div id="results" class="results" hidden></div></div>
       <div class="seg" role="group" aria-label="Open links by"><button data-mode="domain" class="${S.mode === "domain" ? "on" : ""}" aria-pressed="${S.mode === "domain"}">Domain</button><button data-mode="ip" class="${S.mode === "ip" ? "on" : ""}" aria-pressed="${S.mode === "ip"}">IP</button></div>
       <button class="iconbtn" id="theme" title="Theme: ${theme}" aria-label="Toggle theme (${theme})">${svg("sun")}</button>
     </div>
@@ -275,59 +278,151 @@ function card(a) {
   </article>`;
 }
 function wireCards(root = document) {
-  $$("[data-fav]", root).forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); toggleFav(b.dataset.fav); }));
+  $$("[data-fav]", root).forEach((b) => b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); toggleFav(b.dataset.fav); }));
   $$("[data-open]", root).forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); recordOpen(S.appMap.get(b.dataset.open)); }));
-  $$("[data-details]", root).forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openDetails(b.dataset.details); }));
+  $$("[data-details]", root).forEach((b) => b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openDetails(b.dataset.details); }));
   $$(".acard", root).forEach((c) => {
     c.addEventListener("click", () => openDetails(c.dataset.app));
     c.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === c) openDetails(c.dataset.app); });
   });
-  $$("[data-app-row]", root).forEach((r) => r.addEventListener("click", () => openDetails(r.dataset.appRow)));
+  $$("[data-app-row]", root).forEach((r) => r.addEventListener("click", (e) => { if (e.target.closest("a,button")) return; e.preventDefault(); openDetails(r.dataset.appRow); }));
+  $$(".lt[data-details]", root).forEach((t) => t.addEventListener("keydown", (e) => { if (e.key === "Enter") openDetails(t.dataset.details); }));
 }
 function mini(a) {
   const ep = preferred(a);
   return `<div class="card mini" data-app="${esc(a.id)}">${icon(a, "sm")}<div style="min-width:0;flex:1"><div class="nm">${esc(a.name)}</div><div class="tiny muted mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(ep ? ep.url.replace(/^https?:\/\//, "") : "no URL")}</div></div>${pill(a.status, true)}${ep ? `<a class="iconbtn" style="width:32px;height:32px" href="${esc(ep.url)}" target="_blank" rel="noopener noreferrer" data-open="${esc(a.id)}" aria-label="Open ${esc(a.name)}">${svg("ext")}</a>` : ""}</div>`;
 }
 
-// ------------------------------------------------------------------ overview
+// ------------------------------------------------------------------ v2 building blocks
+const ST_TEXT = {
+  up: "Up", auth: "Up (login page)", reachable: "Reachable", degraded: "Degraded", down: "Down", "dns-fail": "No DNS record",
+  unreachable: "Not checkable from the collector", unverified: "Not checked yet", stopped: "Stopped", disabled: "Disabled",
+};
+const sdot = (st) => `<span class="sd ${esc(st)}" role="img" aria-label="${esc(ST_TEXT[st] || st)}" title="${esc(ST_TEXT[st] || st)}"></span>`;
+function shortHost(a) {
+  const L = a.location || {}, w = S.wlById.get(L.workload_id);
+  if (w) return w.display_name || w.name;
+  return L.host_label || L.host_ip || "";
+}
+function tile(a) {
+  const ep = preferred(a);
+  const cls = `lt ${ep ? "" : "nourl"} ${a.hidden || a.status === "disabled" || a.status === "stopped" ? "dim" : ""}`;
+  const inner = `${sdot(a.status)}<button class="more" data-details="${esc(a.id)}" aria-label="Details for ${esc(a.name)}">${svg("q")}</button>
+    ${icon(a)}<div class="nm">${esc(a.name.split(" · ")[0])}${a.name.includes(" · ") ? `<span class="sfx"> · ${esc(a.name.split(" · ").slice(1).join(" · "))}</span>` : ""}</div><div class="host">${esc(shortHost(a))}</div>
+    ${a._fav ? `<span class="fav" aria-label="Favorite">${svg("star")}</span>` : ""}`;
+  return ep
+    ? `<a class="${cls}" href="${esc(ep.url)}" target="_blank" rel="noopener noreferrer" data-open="${esc(a.id)}" title="${esc(a.name)} — ${esc(ep.url)} — ${esc(ST_TEXT[a.status] || a.status)}">${inner}</a>`
+    : `<div class="${cls}" data-details="${esc(a.id)}" tabindex="0" role="button" title="${esc(a.name)} — no web address known">${inner}</div>`;
+}
+function arow(a) {
+  const ep = preferred(a), dom = epOf(a, a.preferred_domain);
+  const u = ep ? `<div class="u" title="${esc(ep.url)}">${esc(ep.url.replace(/^https?:\/\//, "").replace(/\/$/, ""))}</div>`
+    : `<div class="u none">${esc(S.mode === "ip" && dom ? "Only reachable by name" : "No web address")}</div>`;
+  return `<div class="arow ${a.hidden ? "dim" : ""}" data-app-row="${esc(a.id)}">
+    ${icon(a)}<div style="min-width:0"><div class="nm">${esc(a.name)}</div><div class="pp">${esc(a.purpose || a.category || "")}</div></div>
+    ${u}<div class="lc">${esc(hostChain(a).join(" › "))}${a.vlan != null ? ` · VLAN ${esc(a.vlan)}` : ""}</div>
+    <div class="st"><span class="stl">${esc(ST_TEXT[a.status] || a.status)}</span>${sdot(a.status)}
+      <button class="star ${a._fav ? "on" : ""}" data-fav="${esc(a.id)}" aria-pressed="${a._fav}" aria-label="Favorite">${svg("star")}</button>
+      ${ep ? `<a class="btn sm" href="${esc(ep.url)}" target="_blank" rel="noopener noreferrer" data-open="${esc(a.id)}">Open</a>` : ""}</div></div>`;
+}
+function launcherGroups(list) {
+  const order = S.inv.settings_public?.categories_order || [];
+  const groups = {};
+  for (const a of list) (groups[a.category || "Other"] = groups[a.category || "Other"] || []).push(a);
+  const cats = Object.keys(groups).sort((x, y) => ((order.indexOf(x) + 1 || 99) - (order.indexOf(y) + 1 || 99)) || x.localeCompare(y));
+  return cats.map((c) => `<section class="lgroup"><div class="lgroup-h"><h2>${esc(c)}</h2><span class="n">${groups[c].length}</span></div>
+    <div class="launch">${groups[c].sort((x, y) => (x.order ?? 1000) - (y.order ?? 1000) || x.name.localeCompare(y.name)).map(tile).join("")}</div></section>`).join("");
+}
+function healthStrip(apps) {
+  const bucket = (s) => (["up", "auth", "reachable"].includes(s) ? "up" : ["down", "dns-fail"].includes(s) ? "down" : s);
+  const c = {};
+  apps.forEach((a) => { const b = bucket(a.status); c[b] = (c[b] || 0) + 1; });
+  const parts = [["up", "Up"], ["degraded", "Degraded"], ["down", "Down / no DNS"], ["stopped", "Stopped"], ["unreachable", "Not checkable from here"], ["unverified", "Not checked"]];
+  const total = apps.length || 1;
+  return `<div class="panel health"><div class="row" style="justify-content:space-between"><h2>Health</h2><span class="tiny muted">checked ${esc(ago(S.inv.engine?.checks?.last))} from ${esc((S.inv.collector || "").split(" ")[0])}</span></div>
+    <div class="hbar" role="img" aria-label="${parts.map(([k, l]) => `${c[k] || 0} ${l}`).join(", ")}">${parts.filter(([k]) => c[k]).map(([k]) => `<i class="${k}" style="width:${(c[k] / total) * 100}%"></i>`).join("")}</div>
+    <div class="hlegend">${parts.filter(([k]) => c[k]).map(([k, l]) => `<a href="#/apps?status=${k}">${sdot(k === "down" ? "down" : k)}<b>${c[k]}</b> ${l}</a>`).join("")}</div></div>`;
+}
+
+// ------------------------------------------------------------------ home (launcher)
 function vOverview() {
-  const inv = S.inv, sm = inv.summary, bs = sm.by_status;
-  const visible = inv.apps.filter((a) => !a.hidden);
-  const tile = (lbl, n, sub, color, href) => `<a class="card tile" href="${href}" style="color:inherit;text-decoration:none"><div class="lbl">${color ? `<span class="dot" style="background:${color}"></span>` : ""}${lbl}</div><div class="num">${n}</div><div class="sub">${sub}</div></a>`;
-  const up = (bs.up || 0) + (bs.auth || 0) + (bs.reachable || 0);
+  const inv = S.inv;
+  const visible = inv.apps.filter((a) => !a.hidden && a.kind !== "addon-noui");
+  const launchable = visible.filter((a) => a.endpoints.length);
+  const noUrl = visible.filter((a) => !a.endpoints.length);
+  const favs = visible.filter((a) => a._fav).sort((x, y) => S.favs.indexOf(x.id) - S.favs.indexOf(y.id));
+  const recents = S.recents.map((id) => S.appMap.get(id)).filter((a) => a && !a._fav).slice(0, 8);
   const sevOrder = { high: 0, medium: 1, low: 2, info: 3 };
   const issues = [...inv.issues].sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity]);
-  const favs = visible.filter((a) => a._fav);
-  const recents = S.recents.map((id) => S.appMap.get(id)).filter(Boolean).slice(0, 6);
-  const nodes = inv.nodes.map((n) => `<div class="hostrow">${svg("tree")}<div style="flex:1;min-width:0"><div style="font-weight:600">${esc(n.name)} <span class="muted small mono">${esc(n.ip || "")}</span></div>
-     <div class="tiny muted">${n.verified ? `${esc(n.pveversion || "Proxmox")} · ${n.maxcpu || "?"} CPU · mem ${pct(n.mem, n.maxmem)}% · disk ${pct(n.disk, n.maxdisk)}%` : "Last-known address only — run collect-proxmox.sh to verify"}</div></div>
-     ${n.verified ? `<div class="bar" title="Memory ${pct(n.mem, n.maxmem)}%"><i style="width:${pct(n.mem, n.maxmem)}%"></i></div>` : ""}${pill(n.verified ? (n.status === "online" ? "online" : n.status || "unknown") : "unverified")}</div>`).join("");
-  const keyDevs = inv.devices.filter((d) => ["gateway", "server-oob", "kvm", "raspberry-pi", "server"].includes(d.role) || /NAS|Truenas|Home Assistant|Caddy|Proxy|Arr|Mediaserver|pikvm/i.test(d.name || "")).slice(0, 14)
-    .map((d) => `<div class="hostrow">${svg("dev")}<div style="flex:1;min-width:0"><div style="font-weight:600">${esc(d.name || d.hostname || d.mac)}</div><div class="tiny muted mono">${esc(d.ip || "")}${d.vlan != null ? " · VLAN " + esc(d.vlan) : ""}</div></div>${pill(d.online ? "online" : d.online === false ? "offline" : "unknown")}</div>`).join("");
-  const src = inv.sources.map((s) => `<li><b>${esc(s.name)}</b> — ${pill(s.status === "ok" ? "verified" : s.status === "none" ? "unverified" : "degraded", true, s.status)} <span class="muted">${esc(s.detail || s.error || "")} · ${esc(ago(s.at))}</span></li>`).join("");
-  return `<div class="page-head"><div><h1>Overview</h1><p>${esc(visible.length)} apps · ${esc(sm.devices)} devices (${esc(sm.devices_online)} online) · ${esc(sm.nodes_verified)}/${esc(sm.nodes)} Proxmox nodes verified</p></div>
-    <div class="row">${S.me.admin ? `<button class="btn" id="runCheck">${svg("refresh")}Check now</button>` : ""}<a class="btn" href="#/digest">${svg("digest")}Digest</a></div></div>
-  <div class="tiles">
-    ${tile("Up", up, "responding (incl. login pages)", "var(--good)", "#/apps?status=up")}
-    ${tile("Down", (bs.down || 0) + (bs["dns-fail"] || 0), "refused, 5xx or DNS failed", "var(--crit)", "#/apps?status=down")}
-    ${tile("Degraded", bs.degraded || 0, "404, slow or wrong host", "var(--warn)", "#/apps?status=degraded")}
-    ${tile("Unreachable", bs.unreachable || 0, "blocked from this collector", "var(--muted)", "#/apps?status=unreachable")}
-    ${tile("Unverified", bs.unverified || 0, "no check result yet", null, "#/apps?status=unverified")}
-    ${tile("Issues", (sm.issues.high || 0) + (sm.issues.medium || 0), `${sm.issues.high || 0} high · ${sm.issues.medium || 0} medium`, "var(--serious)", "#overview-issues")}
-  </div>
-  ${favs.length ? `<div class="sec"><div class="row" style="margin-bottom:8px"><h2>Favorites</h2></div><div class="strip">${favs.map(mini).join("")}</div></div>` : `<div class="note sec">Star apps to pin them here. Favorites are shared by everyone using this dashboard.</div>`}
-  ${recents.length ? `<div class="sec"><div class="row" style="margin-bottom:8px"><h2>Recently opened</h2><span class="muted small">on this device</span></div><div class="strip">${recents.map(mini).join("")}</div></div>` : ""}
-  <div class="cols">
-    <section class="card sec" id="overview-issues"><div class="sec-h"><h2>Needs attention</h2><span class="muted small">${issues.length} items</span></div>
-      <div class="list">${issues.length ? issues.map(issueRow).join("") : '<div class="empty">Nothing to fix right now.</div>'}</div></section>
-    <div>
-      <section class="card sec"><div class="sec-h"><h2>Proxmox nodes</h2><a class="small" href="#/infra">Infrastructure →</a></div><div class="list">${nodes || '<div class="empty">No nodes known.</div>'}</div></section>
-      <section class="card sec"><div class="sec-h"><h2>Key devices</h2><a class="small" href="#/devices">All devices →</a></div><div class="list">${keyDevs || '<div class="empty">None.</div>'}</div></section>
-      <section class="card sec pad"><h2 style="margin-bottom:8px">Data sources</h2><ul class="small" style="margin:0;padding-left:18px;display:grid;gap:4px">${src}</ul>
-        <p class="tiny muted" style="margin:10px 0 0">Collector <span class="mono">${esc(inv.collector)}</span>. “Unreachable” means this machine could not connect — usually a VLAN firewall — not that the app is down.</p></section>
-    </div>
-  </div>`;
+  const top = issues.filter((i) => i.severity === "high" || i.severity === "medium").slice(0, 6);
+  const nodes = inv.nodes.map((n) => {
+    const wl = inv.workloads.filter((w) => w.node_id === n.id);
+    const run = wl.filter((w) => w.status === "running").length;
+    return `<a class="att" href="#/infra" style="color:inherit;text-decoration:none">${sdot(n.verified ? (n.status === "online" ? "up" : "down") : "unverified")}
+      <div class="t">${esc(n.name)} <span class="tiny muted mono">${esc(n.ip)}</span></div>
+      <div class="s">${n.verified ? `${run}/${wl.length} guests running${n.maxmem ? ` · memory ${pct(n.mem, n.maxmem)}%` : ""}` : "not verified yet"}</div></a>`;
+  }).join("");
+  const rail = `<aside class="home-rail">
+    ${healthStrip(visible)}
+    <div class="panel"><div class="panel-h"><h2>Needs attention</h2><a href="#/digest">All ${issues.length} →</a></div>
+      ${top.map((i) => `<div class="att"><span class="sev ${i.severity}" title="${esc(i.severity)} priority"></span><div class="t">${esc(i.title)}</div><div class="s">${esc(i.suggestion || "")}</div></div>`).join("") || '<div class="empty small">Nothing urgent.</div>'}</div>
+    <div class="panel"><div class="panel-h"><h2>Proxmox · ${esc(inv.nodes[0]?.cluster || "")}</h2><a href="#/infra">Hosts →</a></div>${nodes}<div style="height:6px"></div></div>
+  </aside>`;
+  const head = `<div class="page-head"><div><h1>Home</h1><p>${launchable.length} apps you can open · ${inv.workloads.length} VMs/LXCs · ${inv.containers.length} containers</p></div></div>`;
+  return `${head}<div class="show-m" style="margin-bottom:14px">${healthStrip(visible)}</div><div class="home"><div>
+    ${favs.length ? `<section class="lgroup"><div class="lgroup-h"><h2>Favorites</h2></div><div class="launch">${favs.map(tile).join("")}</div></section>` : ""}
+    ${recents.length ? `<section class="lgroup"><div class="lgroup-h"><h2>Recent</h2><span class="n">this device</span></div><div class="launch">${recents.map(tile).join("")}</div></section>` : ""}
+    ${launcherGroups(launchable)}
+    ${noUrl.length ? `<details class="lgroup"><summary class="lgroup-h" style="cursor:pointer"><h2>Without a web address</h2><span class="n">${noUrl.length}</span></summary><div class="launch" style="margin-top:10px">${noUrl.map(tile).join("")}</div></details>` : ""}
+    <p class="tiny muted">Tap a tile to open it. Hover (or use the Apps list on phones) for details. Star apps in their details to pin them on top.</p>
+  </div>${rail}</div>`;
 }
+
+// ------------------------------------------------------------------ infrastructure (host cards)
+function meter(label, used, total, fmt) {
+  const p = pct(used, total);
+  return `<div class="meter"><div class="k"><span>${label}</span><b>${total ? p + "%" : "—"}</b></div><div class="mbar"><i class="${p > 90 ? "crit" : p > 75 ? "hot" : ""}" style="width:${p}%"></i></div>
+    <div class="tiny muted" style="margin-top:3px">${total ? fmt(used) + " / " + fmt(total) : "not reported"}</div></div>`;
+}
+function vInfra() {
+  const inv = S.inv;
+  const appsOf = (pred) => inv.apps.filter((a) => !a.hidden && pred(a));
+  const chipApp = (a) => `<span class="gapp" data-app-row="${esc(a.id)}">${icon(a, "sm")}${esc(a.name.replace(/ · .*$/, "").replace(/ \(.*\)$/, ""))}${sdot(a.status)}</span>`;
+  const guestRow = (w) => {
+    const cts = inv.containers.filter((c) => c.host_id === w.id);
+    const apps = appsOf((a) => a.location?.workload_id === w.id);
+    const st = w.disabled ? "disabled" : w.status === "running" ? "up" : w.status === "stopped" ? "stopped" : "unverified";
+    const memTxt = w.maxmem ? `<div class="mcol"><div class="mbar" title="memory ${pct(w.mem, w.maxmem)}%"><i style="width:${pct(w.mem, w.maxmem)}%"></i></div></div>` : `<span class="mcol"></span>`;
+    const summary = `<summary class="g ${w.status === "stopped" ? "stopped" : ""}">${sdot(st)}<span class="id">${w.kind === "vm" ? "VM" : "LXC"} ${esc(w.vmid)}</span>
+      <span class="nm">${esc(w.display_name || w.name)}<small>${esc((w.ips || [])[0] || "")}</small></span>
+      <span class="row" style="gap:6px">${cts.length ? `<span class="chip2">${cts.filter((c) => c.state === "running").length}/${cts.length} containers</span>` : ""}${w.onboot && w.status === "stopped" ? '<span class="chip2" style="color:var(--warn-ink)">onboot</span>' : ""}${w.kind === "vm" && w.status === "running" && !w.guest_collected_at ? '<span class="chip2" title="No QEMU guest agent: apps inside unknown">agent off</span>' : ""}</span>${memTxt}</summary>`;
+    if (!apps.length && !cts.length) return `<div>${summary.replace("<summary", "<div").replace("</summary>", "</div>")}</div>`;
+    const ctOnly = cts.filter((c) => !apps.some((a) => a.location?.container_id === c.id));
+    return `<details class="gx">${summary}<div class="gapps">${apps.map(chipApp).join("")}${ctOnly.map((c) => `<span class="gapp ct" title="${esc(c.image)}">${sdot(c.state === "running" ? "up" : "stopped")}${esc(c.name)}</span>`).join("")}</div></details>`;
+  };
+  const nodes = inv.nodes.map((n) => {
+    const wl = inv.workloads.filter((w) => w.node_id === n.id).sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1) || a.vmid - b.vmid);
+    const up = n.uptime ? `up ${Math.round(n.uptime / 86400)} d` : "";
+    return `<section class="card hcard"><div class="hcard-h">${icon({ name: n.name, icon: "proxmox" })}<div style="flex:1;min-width:0"><div class="t">${esc(n.name)}</div>
+        <div class="s mono">${esc(n.ip)} · ${esc(n.pveversion ? "PVE " + ((n.pveversion.match(/proxmox-ve:\s*([\d.]+)/) || [])[1] || n.pveversion) : (n.verified ? "Proxmox VE" : "not verified"))} ${up ? "· " + up : ""}</div></div>${sdot(n.verified ? (n.status === "online" ? "up" : "down") : "unverified")}</div>
+      ${n.verified ? `<div class="meters">${meter("CPU", n.cpu || 0, 1, (x) => Math.round(x * 100) + "%").replace(/\d+% \/ 100%/, `${n.maxcpu || "?"} cores`)}${meter("Memory", n.mem, n.maxmem, gb)}${meter("Root disk", n.disk, n.maxdisk, gb)}</div>` : ""}
+      <div class="guests">${wl.map(guestRow).join("") || '<div class="empty small">No guests reported.</div>'}</div></section>`;
+  }).join("");
+  const placed = new Set(inv.apps.filter((a) => a.location?.node_id || a.location?.workload_id).map((a) => a.id));
+  const standalone = inv.devices.filter((d) => !d.workload_id && !d.node_id && !["client", "iot-climate", "proxmox-guest"].includes(d.role) && !d.hidden)
+    .sort((a, b) => ipSort(a.ip) - ipSort(b.ip));
+  const devRow = (d) => {
+    const apps = appsOf((a) => !placed.has(a.id) && a.location?.device_id === d.id);
+    const sum = `<summary class="g">${sdot(d.online ? "up" : d.online === false ? "stopped" : "unverified")}<span class="id">${esc((d.role || "device").replace("unifi-device", "UniFi").replace("raspberry-pi", "Pi").slice(0, 9))}</span>
+      <span class="nm">${esc(d.name || d.hostname || d.mac)}<small>${esc(d.ip || "")}</small></span><span class="row">${d.vlan != null ? `<span class="chip2">VLAN ${esc(d.vlan)}</span>` : ""}</span><span class="mcol"></span></summary>`;
+    return apps.length ? `<details class="gx">${sum}<div class="gapps">${apps.map(chipApp).join("")}</div></details>` : `<div>${sum.replace("<summary", "<div").replace("</summary>", "</div>")}</div>`;
+  };
+  return `<div class="page-head"><div><h1>Infrastructure</h1><p>Cluster <b>${esc(inv.nodes[0]?.cluster || "?")}</b> · ${inv.workloads.filter((w) => w.status === "running").length}/${inv.workloads.length} guests running · ${inv.containers.length} containers. Click a guest to see what runs in it.</p></div></div>
+  <div class="hosts">${nodes}</div>
+  <section class="card hcard" style="margin-top:16px"><div class="hcard-h"><div style="flex:1"><div class="t">Outside Proxmox</div><div class="s">Gateway, switches, access points, servers, Pis and appliances seen by UniFi</div></div></div>
+    <div class="guests">${standalone.map(devRow).join("")}</div></section>`;
+}
+
 function issueRow(i) {
   const ev = (i.evidence || []).filter(Boolean);
   const target = i.ref && S.appMap.get(i.ref) ? i.ref : (S.inv.apps.find((a) => a.endpoints.some((e) => e.id === i.ref)) || {}).id;
@@ -384,7 +479,8 @@ function vApps(params) {
       <label class="switch"><input type="checkbox" data-fchk="showHidden" ${f.showHidden ? "checked" : ""}>Show hidden (${apps.filter((a) => a.hidden).length})</label>
       ${anyF ? '<button class="btn sm" id="clearF">Clear filters</button>' : ""}</div>
   </details>
-  ${list.length ? cats.filter((c) => groups[c]).map((c) => `<div class="cat-h"><h2>${esc(c)}</h2><span class="muted small">${groups[c].length}</span></div><div class="cards">${groups[c].map(card).join("")}</div>`).join("")
+  <div class="row" style="justify-content:flex-end;margin:-4px 0 8px"><div class="viewtog" role="group" aria-label="Layout"><button data-view="list" class="${ls.get("appsView", "list") === "list" ? "on" : ""}">List</button><button data-view="grid" class="${ls.get("appsView", "list") === "grid" ? "on" : ""}">Tiles</button></div></div>
+  ${list.length ? cats.filter((c) => groups[c]).map((c) => `<div class="cat-h"><h2>${esc(c)}</h2><span class="muted small">${groups[c].length}</span></div>${ls.get("appsView", "list") === "grid" ? `<div class="launch">${groups[c].map(tile).join("")}</div>` : `<div class="rows">${groups[c].map(arow).join("")}</div>`}`).join("")
     : `<div class="card empty">No applications match these filters.</div>`}`;
 }
 function wireFilters() {
@@ -392,6 +488,7 @@ function wireFilters() {
   $$("[data-f]").forEach((b) => b.addEventListener("click", () => { S.filters[b.dataset.f] = b.dataset.v; if (location.hash.includes("?")) history.replaceState(null, "", "#/apps"); save(); }));
   $$("[data-fsel]").forEach((s) => s.addEventListener("change", () => { S.filters[s.dataset.fsel] = s.value; save(); }));
   $$("[data-fchk]").forEach((c) => c.addEventListener("change", () => { S.filters[c.dataset.fchk] = c.checked; save(); }));
+  $$("[data-view]").forEach((b) => b.addEventListener("click", () => { ls.set("appsView", b.dataset.view); render(); }));
   const fd = $("#filt"); if (fd) fd.addEventListener("toggle", () => { if (window.innerWidth <= 860) ls.set("filtOpen", fd.open); });
   const cl = $("#clearF"); if (cl) cl.addEventListener("click", () => { S.filters = { showHidden: S.filters.showHidden }; history.replaceState(null, "", "#/apps"); save(); });
 }
@@ -565,49 +662,6 @@ function vDiag(params) {
     <td class="hide-m small">${e.tls?.days_left != null ? esc(e.tls.days_left + " d") : "—"}</td><td class="hide-m small">${esc(ago(e.checked_at))}</td>
     <td><button class="btn sm" data-diag2="${esc(e.id)}" data-app2="${esc(a.id)}">Run</button></td></tr>`).join("")}
   </tbody></table></div><div id="diagPanel" class="sec" style="margin-top:16px"></div>`;
-}
-
-// ------------------------------------------------------------------ infrastructure
-function vInfra() {
-  const inv = S.inv;
-  const appsOn = (pred) => inv.apps.filter((a) => !a.hidden && pred(a));
-  const appLine = (a, lvl) => `<div class="tn l${lvl} app" data-app-row="${esc(a.id)}">${icon(a, "sm")}<span class="nm">${esc(a.name)}</span>${pill(a.status, true)}<span class="meta mono hide-m">${esc((preferred(a) || {}).url || "")}</span></div>`;
-  const ctLine = (c, lvl) => {
-    const apps = appsOn((a) => a.location?.container_id === c.id);
-    return `<div class="tn l${lvl}"><span class="kind">CT</span><span class="nm">${esc(c.name)}</span><span class="meta">${esc(c.image)}</span>${pill(c.state === "running" ? "up" : "stopped", true)}${c.compose_project ? `<span class="pill">${esc(c.compose_project)}</span>` : ""}</div>${apps.map((a) => appLine(a, lvl + 1)).join("")}`;
-  };
-  const wlBlock = (w) => {
-    const cts = inv.containers.filter((c) => c.host_id === w.id);
-    const apps = appsOn((a) => a.location?.workload_id === w.id && !a.location?.container_id);
-    const st = w.disabled ? "disabled" : w.status === "running" ? "up" : w.status === "stopped" ? "stopped" : "unknown";
-    return `<div class="tn l1"><span class="kind">${w.kind === "vm" ? "VM" : "LXC"} ${esc(w.vmid)}</span><span class="nm">${esc(w.display_name || w.name)}</span>${pill(st, true)}
-      <span class="meta mono">${esc((w.ips || []).join(", "))}${w.vlans?.length ? " · VLAN " + esc(w.vlans.join(",")) : ""}</span>${w.guest_collected_at ? "" : w.kind === "vm" && w.status === "running" ? '<span class="pill" title="Run collect-guest.sh inside this VM">guest not collected</span>' : ""}</div>
-      ${cts.map((c) => ctLine(c, 2)).join("")}${apps.map((a) => appLine(a, 2)).join("")}`;
-  };
-  const nodes = inv.nodes.map((n) => {
-    const wls = inv.workloads.filter((w) => w.node_id === n.id).sort((a, b) => a.vmid - b.vmid);
-    const own = appsOn((a) => a.location?.node_id === n.id && !a.location?.workload_id && !a.location?.container_id);
-    return `<details class="tg" open><summary class="tn"><span class="kind">NODE</span><span class="nm">${esc(n.name)}</span><span class="meta mono">${esc(n.ip)}</span>${pill(n.verified ? (n.status === "online" ? "online" : n.status || "unknown") : "unverified")}<span class="meta">${n.verified ? `${wls.length} guests` : "not collected yet"}</span></summary>
-      ${own.map((a) => appLine(a, 1)).join("")}${wls.map(wlBlock).join("")}
-      ${!n.verified ? `<div class="tn l1 muted small">VMs and LXCs appear here after <span class="mono">collect-proxmox.sh</span> runs on ${esc(n.name)}.</div>` : ""}</details>`;
-  }).join("");
-  const placed = new Set(inv.apps.filter((a) => a.location?.node_id || a.location?.workload_id).map((a) => a.id));
-  // Proxmox-vendor clients not yet tied to a workload
-  const pveGuests = inv.devices.filter((d) => d.role === "proxmox-guest" && !d.workload_id && !d.node_id);
-  const standalone = inv.devices.filter((d) => !d.workload_id && !d.node_id && d.role !== "proxmox-guest" && !["client", "iot-climate"].includes(d.role) && !d.hidden);
-  const devBlock = (d) => {
-    const apps = appsOn((a) => !placed.has(a.id) && a.location?.device_id === d.id);
-    apps.forEach((a) => placed.add(a.id));
-    return `<div class="tn"><span class="kind">${esc((d.role || "dev").toUpperCase().slice(0, 8))}</span><span class="nm">${esc(d.name || d.hostname || d.mac)}</span><span class="meta mono">${esc(d.ip || "")}${d.vlan != null ? " · VLAN " + esc(d.vlan) : ""}</span>${pill(d.online ? "online" : d.online === false ? "offline" : "unknown", true)}</div>${apps.map((a) => appLine(a, 1)).join("")}`;
-  };
-  const pveHtml = pveGuests.map(devBlock).join("");
-  const standHtml = standalone.map(devBlock).join("");
-  const rest = inv.apps.filter((a) => !a.hidden && !placed.has(a.id) && !(a.location?.device_id && (pveGuests.concat(standalone)).some((d) => d.id === a.location.device_id)));
-  return `<div class="page-head"><div><h1>Infrastructure</h1><p>Physical host → VM/LXC → container → application. Cluster <b>${esc(inv.nodes[0]?.cluster || "?")}</b>.</p></div></div>
-  <section class="card sec"><div class="sec-h"><h2>Proxmox</h2></div><div class="tree">${nodes || '<div class="empty">No nodes.</div>'}</div></section>
-  ${pveHtml ? `<section class="card sec"><div class="sec-h"><h2>Proxmox guests seen on the network</h2><span class="muted small">Proxmox virtual NICs in UniFi, not yet matched to a VM/LXC</span></div><div class="tree">${pveHtml}</div></section>` : ""}
-  <section class="card sec"><div class="sec-h"><h2>Standalone devices</h2><span class="muted small">Servers, appliances, Pis, network gear</span></div><div class="tree">${standHtml || '<div class="empty">None.</div>'}</div></section>
-  ${rest.length ? `<section class="card sec"><div class="sec-h"><h2>Not yet placed</h2><span class="muted small">Known only from DNS/proxy or manual entry</span></div><div class="tree">${rest.map((a) => appLine(a, 0)).join("")}</div></section>` : ""}`;
 }
 
 // ------------------------------------------------------------------ network (DNS & proxy)

@@ -916,6 +916,38 @@ class Builder:
                     a["mgmt_links"].append(dict(label=f"{w['kind'].upper()} {w['vmid']} in Proxmox",
                                                 url=f"https://{n['ip']}:8006/#v1:0:={'qemu' if w['kind']=='vm' else 'lxc'}%2F{w['vmid']}"))
             a["name"] = a.get("name") or a["id"]
+            if a["name"] and a["name"] == a["name"].lower() and not a.get("catalog_key"):
+                a["name"] = re.sub(r"[-_]+", " ", a["name"]).title()  # container names → readable labels
+        # Same name in several places (4× Traefik, 2× Frigate…): say where each one runs.
+        groups = {}
+        for a in self.apps.values():
+            groups.setdefault(a["name"], []).append(a)
+        for name, items in groups.items():
+            if len(items) < 2:
+                continue
+            for a in items:
+                L = a["location"]
+                where = (self.workloads.get(L.get("workload_id")) or {}).get("name") or L.get("host_label") or L.get("host_ip")
+                if a.get("catalog_key") == "ha-dashboard" and L.get("container_id"):
+                    where = L["container_id"].split(":")[-1]
+                if where and where not in name:
+                    a["name"] = f"{name} · {where}"
+        # Still ambiguous (same guest name on two nodes, or two containers on one host)
+        groups = {}
+        for a in self.apps.values():
+            groups.setdefault(a["name"], []).append(a)
+        for name, items in groups.items():
+            if len(items) < 2:
+                continue
+            for a in items:
+                L = a["location"]
+                w = self.workloads.get(L.get("workload_id")) or {}
+                ct = (L.get("container_id") or "").split(":")[-1]
+                hosts = {(self.workloads.get(x["location"].get("workload_id")) or {}).get("id") for x in items}
+                if len(hosts) > 1 and w:
+                    a["name"] = f"{name} ({w.get('node')}, {w['kind'].upper()} {w['vmid']})"
+                elif ct:
+                    a["name"] = f"{name} ({ct})"
         return self
 
 
