@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from server import checks, discovery, merge, parsers  # noqa: E402
+from server import checks, discovery, live, merge, parsers  # noqa: E402
 from server.store import Store  # noqa: E402
 
 SS = """tcp   LISTEN 0      4096         0.0.0.0:8989      0.0.0.0:*    users:(("docker-proxy",pid=1,fd=4))
@@ -141,6 +141,7 @@ class EndToEnd(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self._tokdir, live.TOKEN_DIR = live.TOKEN_DIR, os.path.join(self.tmp, "no-tokens")  # never call real APIs in tests
         ext = os.path.join(self.tmp, "extracted")
 
         def run(name, files, meta):
@@ -168,6 +169,7 @@ class EndToEnd(unittest.TestCase):
         self.cfg = {}
 
     def tearDown(self):
+        live.TOKEN_DIR = self._tokdir
         shutil.rmtree(self.tmp)
 
     def build(self):

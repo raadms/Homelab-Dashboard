@@ -631,8 +631,16 @@ class Builder:
                     continue
                 where = self.ip_index.get(d["ip"], {})
                 wl = self.workloads.get(where.get("workload")) or {}
+                if wl and any(a["location"].get("workload_id") == wl["id"] and a.get("catalog_key") == key for a in self.apps.values()):
+                    break  # one app per guest: extra NICs (e.g. TrueNAS storage networks) are not separate apps
                 if wl.get("guest_collected_at") and any(a["location"].get("workload_id") == wl["id"] and a.get("catalog_key") == key for a in self.apps.values()):
                     break  # real runtime evidence already produced this app
+                # anchor multi-NIC guests on their management address (the one a DNS name or the lowest VLAN points to)
+                if wl and len(wl.get("ips") or []) > 1:
+                    dns_ips = {ip for r in self.domains.values() for ip in (r.get("addresses") or [])}
+                    best = sorted(wl["ips"], key=lambda i: (i not in dns_ips, self.vlan_of(i) or 999))[0]
+                    if best != d["ip"]:
+                        continue
                 aid = eid("app", "dev", d["id"].split(":", 1)[1], key)
                 nm = inf["name"] if key not in ("truenas", "homeassistant", "caddy") else f"{inf['name']} ({d.get('name') or d.get('hostname')})"
                 a = self.app(aid, name=nm, category=inf["category"], icon=inf["icon"], purpose=inf["purpose"], catalog_key=key,

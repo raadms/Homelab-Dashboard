@@ -99,7 +99,7 @@ def proxmox(node_ips):
             try:
                 if kind == "lxc":
                     for itf in _get(f"{base}/nodes/{node}/lxc/{vmid}/interfaces", hdr)["data"] or []:
-                        if itf.get("name") != "lo" and itf.get("inet"):
+                        if itf.get("inet") and not re.match(r"^(lo|docker|br-|veth|virbr|tailscale|wg)", itf.get("name") or ""):
                             entry["agent_ips"].append(dict(ifname=itf["name"], ip=itf["inet"].split("/")[0], mac=(itf.get("hwaddr") or "").lower()))
                 elif cfgs.get("agent", "").startswith("1"):
                     entry["agent_enabled"] = True

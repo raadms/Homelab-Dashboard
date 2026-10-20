@@ -209,7 +209,17 @@ def check_endpoint(ep, last_http_at=0, location="collector", prev_http=None):
             hh = host if port in (80, 443) else f"{host}:{port}"
             res["http"] = http_get(scheme, ip, port, hh, path)
             res["http_requested"] = True
+            err = (res["http"].get("error") or "").upper()
+            if scheme == "https" and not res["http"]["ok"] and ("WRONG_VERSION" in err or "RECORD_LAYER" in err or "HTTP_REQUEST" in err):
+                # The port speaks plain HTTP. Say so instead of calling the app broken.
+                plain = http_get("http", ip, port, hh, path)
+                if plain["ok"]:
+                    res["http"] = dict(plain, scheme_mismatch="http")
+                    res.pop("tls", None)
         elif prev_http:
             res["http"] = dict(prev_http, cached=True)  # reuse the last answer; do not re-probe
     res["status"], res["summary"], res["hypothesis"] = classify(res)
+    if (res.get("http") or {}).get("scheme_mismatch"):
+        res["summary"] += " — over plain HTTP; this URL should be http://, not https://"
+        res["scheme_mismatch"] = "http"
     return res

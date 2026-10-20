@@ -10,7 +10,7 @@ import re
 APPS = {
     "proxmox":      ("Proxmox VE", "Infrastructure", "proxmox", "Hypervisor and cluster management", "https", 8006, "/"),
     "pbs":          ("Proxmox Backup Server", "Infrastructure", "proxmox", "VM/LXC backups", "https", 8007, "/"),
-    "homeassistant":("Home Assistant", "Home", "home-assistant", "Home automation", "https", 8123, "/"),
+    "homeassistant":("Home Assistant", "Home", "home-assistant", "Home automation", "http", 8123, "/"),
     "unifi":        ("UniFi Network", "Network", "ubiquiti-unifi", "Network controller (Cloud Gateway Fiber)", "https", 443, "/network/"),
     "unifi-protect":("UniFi Protect", "Security", "ubiquiti-unifi", "Cameras / NVR", "https", 443, "/protect/"),
     "caddy":        ("Caddy", "Network", "caddy", "Reverse proxy and TLS", "https", 443, "/"),
