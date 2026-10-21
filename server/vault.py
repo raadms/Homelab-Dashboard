@@ -15,7 +15,7 @@ FIELDS = {
     "proxmox": {"token": r"^[\w.@-]+![\w.-]+=[0-9a-f-]{36}$", "hosts": r"^[\w.:\-, ]{0,300}$"},
     "portainer": {"servers": None},  # list of {host, token}
     "unifi": {"host": r"^[\w.:\-]{1,120}$", "key": r"^[\w\-]{8,200}$", "site": r"^[\w\-]{1,40}$"},
-    "deepscan": {"hosts": r"^[\w.:\-, ]{0,300}$", "user": r"^[a-z_][a-z0-9_-]{0,31}$", "port": r"^\d{1,5}$"},
+    "agents": {"servers": None},  # list of {host, key}
     "homeassistant": {"url": r"^https?://[\w.:\-/]{3,200}$", "token": r"^[\w.\-]{20,400}$"},
 }
 SECRET_KEYS = {"token", "key"}
@@ -53,19 +53,21 @@ class Vault:
         if name not in FIELDS:
             raise KeyError(name)
         cur = self.get(name)
-        if name == "portainer":
+        if name in ("portainer", "agents"):
+            sk, label, eg = ("token", "Portainer", "10.10.30.30:9443") if name == "portainer" else ("key", "Docker agent", "10.10.30.30:9180")
             servers = []
             for s in values.get("servers") or []:
                 host = str(s.get("host", "")).strip()
-                tok = str(s.get("token", "")).strip()
+                tok = str(s.get(sk, "")).strip()
                 if not re.match(r"^[\w.\-]+(:\d+)?$", host):
-                    raise ValueError(f"Portainer address must look like 10.10.30.30:9443 (got {host[:40]})")
+                    raise ValueError(f"{label} address must look like {eg} (got {host[:40]})")
                 old = next((o for o in cur.get("servers", []) if o["host"] == host), None)
                 if not tok and old:
-                    tok = old["token"]  # unchanged: the UI never receives the stored token
-                if not re.match(r"^[\w.\-=]{10,300}$", tok):
-                    raise ValueError(f"Portainer token for {host} looks wrong")
-                servers.append(dict(host=host, token=tok))
+                    tok = old[sk]  # unchanged: the UI never receives the stored secret
+                rx = r"^[\w.\-=]{10,300}$" if name == "portainer" else r"^[0-9a-f]{32,128}$"
+                if not re.match(rx, tok):
+                    raise ValueError(f"{label} {'token' if name == 'portainer' else 'key'} for {host} looks wrong")
+                servers.append({"host": host, sk: tok})
             new = dict(servers=servers)
         else:
             new = dict(cur)
@@ -95,10 +97,11 @@ class Vault:
         out = {}
         for name in FIELDS:
             v = d.get(name) or {}
-            if name == "portainer":
-                out[name] = dict(configured=bool(v.get("servers")), servers=[dict(host=s["host"], hint="…" + s["token"][-4:]) for s in v.get("servers", [])])
+            if name in ("portainer", "agents"):
+                sk = "token" if name == "portainer" else "key"
+                out[name] = dict(configured=bool(v.get("servers")), servers=[dict(host=s["host"], hint="…" + s[sk][-4:]) for s in v.get("servers", [])])
             else:
-                req = SECRET_KEYS & set(FIELDS[name]) or {"hosts"}
+                req = SECRET_KEYS & set(FIELDS[name])
                 out[name] = dict(configured=all(v.get(k) for k in req) and bool(v),
                                  **{k: (("…" + v[k][-4:]) if k in SECRET_KEYS else v[k]) for k in v if v.get(k)})
         return out

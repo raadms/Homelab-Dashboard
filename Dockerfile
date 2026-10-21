@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.title="homelab-dashboard" \
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     DASH_DATA=/data DASH_QUIET=1 DASH_PORT=8088 DASH_TOKEN_DIR=/data/tokens
 
-RUN apk add --no-cache tzdata openssh-client && addgroup -g 10001 dash && adduser -D -u 10001 -G dash -h /app dash
+RUN apk add --no-cache tzdata && addgroup -g 10001 dash && adduser -D -u 10001 -G dash -h /app dash
 WORKDIR /app
 COPY server/ server/
 COPY web/ web/

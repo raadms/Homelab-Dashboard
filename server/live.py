@@ -232,3 +232,40 @@ def unifi(host, key, site="default"):
     return (dict(name="UniFi API (read-only)", status="ok" if not errs else "partial", at=at, error="; ".join(errs)[:300] or None,
                  detail=f"{nets} networks, {users} known clients"),
             dict(collector="unifi", hostname=host, at=at, live=True, unifi=out, failed=[]))
+
+
+# ======================================================================= Docker agents
+
+def _sign(key, path):
+    import hashlib
+    import hmac as _h
+    ts = int(time.time())
+    return f"HMAC {ts}:" + _h.new(key.encode(), f"{ts}\n{path}".encode(), hashlib.sha256).hexdigest()
+
+
+def agents(servers):
+    """Read-only homelab-dashboard-agent on each Docker host. Returns (status, {host_ip: …})."""
+    if not servers:
+        return dict(name="Docker agents", status="not-configured", detail="No Docker agents added yet (Admin → Connections)"), {}
+    hosts, errs, at = {}, [], now()
+    for sv in servers:
+        addr = sv["host"] if ":" in sv["host"] else sv["host"] + ":9180"
+        path = "/v1/containers"
+        try:
+            req = urllib.request.Request(f"http://{addr}{path}", headers={"Authorization": _sign(sv["key"], path), "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                d = json.load(r)
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"{addr}: {_err(e)}" + (" — the key does not match this agent, or a clock is wrong" if "401" in _err(e) else ""))
+            continue
+        lines = [json.dumps(dict(Names=(c.get("Names") or [""])[0], Image=c.get("Image"), State=c.get("State"), Status=c.get("Status"),
+                                 Ports=_port_str(c.get("Ports")), Labels=c.get("Labels") or {}, Networks=",".join(c.get("Networks") or [])))
+                 for c in d.get("containers", [])]
+        parsed = parsers.containers("\n".join(lines), "docker")
+        for c, raw in zip(parsed, d.get("containers", [])):
+            c["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(raw["Created"])) if raw.get("Created") else None
+        ip = addr.rsplit(":", 1)[0]
+        hosts[ip] = dict(at=at, containers=parsed, source=f"Docker agent {addr} ({d.get('hostname', '?')}) {at}")
+    status = "ok" if hosts and not errs else ("partial" if hosts else "error")
+    return dict(name="Docker agents (read-only)", status=status, at=at, error="; ".join(errs)[:400] or None,
+                detail=f"{len(hosts)} of {len(servers)} hosts, {sum(len(h['containers']) for h in hosts.values())} containers"), hosts

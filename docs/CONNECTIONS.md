@@ -5,7 +5,7 @@ Every connection is set up in **Admin → Connections**, and every one is option
 | Connection | What it adds | Needs network access to |
 |---|---|---|
 | Proxmox VE (API token) | All VMs/LXCs, status, IPs, VLANs, CPU, memory and disk, live | nodes, TCP 8006 |
-| **Deep scan (SSH)** | Everything **inside** VMs and LXCs: containers, stacks, ports, Traefik/Caddy routes | nodes, TCP 22 |
+| **Docker agents** | Every container on each Docker host, live, including stacks, ports and Traefik routes | each Docker host, TCP 9180 |
 | Portainer | Live container state from each Portainer | each Portainer, TCP 9443 |
 | UniFi | Network/VLAN names, DHCP reservations, local DNS records, offline devices | gateway, TCP 443 |
 | Home Assistant | Add-ons and network clients | HA, TCP 443/8123 |
@@ -22,22 +22,30 @@ Every connection is set up in **Admin → Connections**, and every one is option
 1. In the dashboard, click **Disconnect**.
 2. In Proxmox, go to **API Tokens**, select the token and click **Remove**. Optionally remove the user `dashboard@pve` too.
 
-## Deep scan (sees inside VMs and LXCs)
+## Docker agents (recommended for containers)
 
-The dashboard runs the read-only `collect-proxmox.sh` on each node over SSH. Its key is installed with a *forced command*: `command="/usr/local/sbin/homelab-collect --stdout",restrict`. Whatever is asked, the node runs only that script. There is no shell, no other command, and no port, agent or X11 forwarding. VMs additionally need the QEMU guest agent to be seen inside.
+A tiny read-only container, `ghcr.io/raadms/homelab-dashboard-agent`, runs on each Docker host. It answers one question, "which containers run here?", by making a single Docker call: `GET /containers/json`.
+
+What it returns: name, image, state, ports, Compose stack, and Traefik route/port labels.
+
+What it never returns or does:
+- environment variables, inspect data, or any other labels;
+- logs or exec;
+- starting or stopping anything. That code doesn't exist in it.
+
+How it is protected:
+- **Signed requests:** each request is signed with a per-host key (HMAC-SHA256) and expires after 60 s. The key never crosses the network.
+- **Locked-down container:** read-only filesystem, all capabilities dropped, `no-new-privileges`, and the Docker socket mounted read-only.
 
 **Add:**
-1. Admin → Connections → Deep scan → **How do I add this?** → copy the command. It contains this dashboard's own public key.
-2. Paste it into a shell on **each** Proxmox node. It should print `homelab-dashboard deep scan installed`.
-3. Allow the dashboard's host to reach the nodes on TCP 22.
-4. Enter the node addresses and click **Save & scan**. Scans then repeat on the schedule set in Checks & schedule.
+1. Admin → Connections → Docker agents → **Add a Docker host** → enter the host IP → **Generate key**.
+2. Copy the compose snippet and deploy it on that host as a stack named `homelab-agent`.
+3. Allow the dashboard's host to reach that host on **TCP 9180**. Nothing else needs to reach it.
+4. Click **Save & test**. Repeat for each Docker host; each gets its own key.
 
 **Remove:**
-1. In the dashboard, clear the addresses and click **Save & scan**.
-2. On each node, run the following. `--follow-symlinks` matters because `authorized_keys` is a symlink into the cluster filesystem:
-   ```bash
-   sed -i --follow-symlinks '/homelab-dashboard$/d' /root/.ssh/authorized_keys; rm -f /usr/local/sbin/homelab-collect
-   ```
+1. In the dashboard, click **Remove** next to the host.
+2. On the host, delete the `homelab-agent` stack. The key disappears with it.
 
 ## Portainer (one row per Portainer server)
 

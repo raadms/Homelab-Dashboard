@@ -1020,6 +1020,9 @@ def build(cfg, data_dir):
         hosts = [h.strip() for h in (cfg.get("pve_hosts") or "").split(",") if h.strip()] or [n["ip"] for n in seed.get("proxmox_nodes", [])]
         pst, api_runs = live.proxmox(hosts, cfg.get("pve_token"))
         dst, docker_hosts = live.portainer(cfg.get("portainer_servers"))
+        ast, agent_hosts = live.agents(cfg.get("agent_servers"))
+        docker_hosts = dict(docker_hosts, **agent_hosts)  # agents win where both report the same host
+        b.sources.append(ast)
     b.sources += [x for x in (pst, dst) if x]
     col["runs"] = live.merge_runs(col["runs"], api_runs, docker_hosts)
     b.add_seed_nodes()

@@ -178,7 +178,7 @@ function buildModel() {
     const h = { key: w.id, kind: w.kind === "vm" ? "VM" : "LXC", id: w.vmid, name: w.display_name || w.name, node: w.node, ips: w.ips || [], vlan: (w.vlans || []).join(", "),
       status: w.disabled ? "disabled" : w.status, mem: w.maxmem ? w.mem / w.maxmem : null, rows: [], wl: w,
       portainer: preferred(portainer, "ip")?.url || preferred(portainer)?.url, traefik: traefik ? preferred(traefik, "domain")?.url : null,
-      note: w.status !== "running" ? "This guest is stopped." : (w.kind === "vm" && !w.guest_collected_at ? "Apps inside aren't visible yet — turn on Deep scan in Admin → Connections (VMs also need the QEMU guest agent)." : null) };
+      note: w.status !== "running" ? "This guest is stopped." : (w.kind === "vm" && !w.guest_collected_at ? "Containers inside aren't visible yet — add the read-only Docker agent on this host (Admin → Connections → Docker agents)." : null) };
     for (const c of D.containers.filter((c) => c.host_id === w.id)) {
       const a = appsByCt.get(c.id);
       if (a && a.hidden && !S.showHidden) continue;
@@ -303,7 +303,7 @@ function vHome() {
   const M = S.model, all = M.rows;
   if (!all.length && !M.unk.length && !S.inv.nodes.some((n) => n.verified)) {
     return `<div class="glass login" style="max-width:640px"><div class="hello">Welcome</div><h1 style="margin:6px 0 10px">Let's find everything you run</h1>
-      <p class="muted">Connect Proxmox (read-only) and turn on <b>Deep scan</b> — the dashboard then fills itself: every VM, LXC, container, IP, VLAN and route, kept up to date automatically.</p>
+      <p class="muted">Connect Proxmox (read-only) for every VM and LXC, then add the small read-only <b>Docker agent</b> on each Docker host to see every container — kept up to date automatically.</p>
       <div class="row" style="margin-top:16px"><a class="btn primary" href="#/admin" data-goto="connections">${svg("plug")}Connect Proxmox</a><a class="btn" href="#/admin" data-goto="backup">${svg("save")}Upload a scan</a></div></div>`;
   }
   const run = all.filter((r) => rowClass(r) === "run").length, bad = all.filter((r) => rowClass(r) === "bad").length, stop = all.filter((r) => rowClass(r) === "stop").length;
@@ -486,6 +486,18 @@ const CONN = {
       "In Proxmox: <b>Datacenter → Permissions → API Tokens</b> → select <code>dashboard@pve</code> / <code>dash</code> → <b>Remove</b>. It stops working immediately.",
       "Optional, to remove everything: <b>Datacenter → Permissions → Users</b> → select <code>dashboard@pve</code> → <b>Remove</b> (this also removes its permission)."],
     fields: [["token", "API token", "password", "dashboard@pve!dash=xxxxxxxx-xxxx-…"], ["hosts", "Node addresses (optional)", "text", "10.10.10.10, 10.10.10.11"]] },
+  agents: { title: "Docker agents", icon: "docker", ro: "read-only, recommended",
+    gives: ["Every container on each Docker host, live: running, stopped, restarting, ports, stack, Traefik address",
+      "The agent can only list containers — it cannot start, stop, exec, read logs, inspect or see environment variables",
+      "Its key never travels over the network: each request is signed and expires after 60 seconds"],
+    how: ["Click <b>Add a Docker host</b> below, enter the host's IP (e.g. <code>10.10.40.40</code>) and click <b>Generate key</b>.",
+      "Copy the compose snippet that appears and deploy it on <b>that</b> host as a new stack (Portainer → Stacks → Add stack → paste → Deploy).",
+      "Allow the dashboard's host to reach that host on <b>TCP 9180</b> in your firewall (and nothing else needs to reach it).",
+      "Back here click <b>Save &amp; test</b>. Repeat for each Docker host — each gets its own key."],
+    remove: ["Here: click <b>Remove</b> next to the host.",
+      "On that host: delete the <code>homelab-agent</code> stack (Portainer → Stacks → homelab-agent → Delete). Its key stops existing with it.",
+      "Optional: remove the firewall rule for TCP 9180."],
+    fields: null },
   portainer: { title: "Portainer", icon: "portainer", ro: "read-only, optional",
     gives: ["Every container in every Portainer, live: running, stopped, restarting", "Traefik routes from container labels — no scans needed", "Add one line per Portainer server"],
     how: ["Open Portainer → <b>Users → Add user</b> <code>dashboard</code>. Business Edition: give it the <b>Read-only user</b> role on each environment. Community Edition: a standard user with access to the environment.",
@@ -526,19 +538,20 @@ async function vAdmin() {
 const ah = (title, text, extra = "") => `<div class="ah"><div><h2>${title}</h2><p>${text}</p></div>${extra}</div>`;
 
 async function aConnections() {
-  const [r, ds] = await Promise.all([api("/api/admin/connections"), api("/api/admin/deepscan").catch((e) => ({ error: e.message }))]);
+  const r = await api("/api/admin/connections");
   const mode = r.mode;
   const card = (k) => {
     const c = CONN[k], v = r.connections[k] || {}, last = v.last || {};
     const st = !v.configured ? '<span class="status-off">Not connected</span>' : last.status === "ok" ? `<span class="status-ok">Connected${last.detail ? " · " + esc(last.detail) : ""}</span>` : last.status ? `<span class="status-err">${esc(last.error || last.status)}</span>` : '<span class="status-off">Saved — not tested yet</span>';
     let form;
-    if (k === "portainer") {
-      const servers = (v.servers || []).concat([{ host: "", hint: "" }]);
-      form = `<div id="ptrows">${servers.map((s, i) => `<div class="cform" data-prow><label class="f">Portainer address<input class="inp" name="host" value="${esc(s.host)}" placeholder="10.10.30.30:9443"></label>
-        <label class="f">Access token<input class="inp" name="token" type="password" placeholder="${s.hint ? "saved (" + esc(s.hint) + ") — leave empty to keep" : "ptr_…"}" autocomplete="off"></label>
-        <div class="acts">${s.host ? `<button class="btn sm danger" data-prm="${i}" type="button">${svg("trash")}Remove</button>` : ""}</div></div>`).join("")}</div>
-        <button class="btn sm" type="button" id="ptadd" style="margin-top:10px">${svg("plus")}Add another Portainer</button>
-        <p class="muted small" style="margin:8px 0 0">One line per Portainer server. If one Portainer already manages several hosts (agents/environments), one line covers all of them.</p>`;
+    if (k === "portainer" || k === "agents") {
+      const ag = k === "agents", sk = ag ? "key" : "token";
+      const servers = (v.servers || []).concat(v.servers?.length ? [] : [{ host: "", hint: "" }]);
+      form = `<div data-rows="${k}">${servers.map((s, i) => `<div data-prow><div class="cform"><label class="f">${ag ? "Docker host IP" : "Portainer address"}<input class="inp" name="host" value="${esc(s.host)}" placeholder="${ag ? "10.10.40.40" : "10.10.30.30:9443"}"></label>
+        <label class="f">${ag ? "Agent key" : "Access token"}<input class="inp mono" name="${sk}" type="${ag ? "text" : "password"}" placeholder="${s.hint ? "saved (" + esc(s.hint) + ") — leave empty to keep" : ag ? "click Generate key" : "ptr_…"}" autocomplete="off"></label>
+        <div class="acts">${ag ? `<button class="btn sm" type="button" data-genkey>${svg("plus")}Generate key</button>` : ""}${s.host ? `<button class="btn sm danger" data-prm="${k}" type="button">${svg("trash")}Remove</button>` : ""}</div></div>${ag ? '<div data-snippet></div>' : ""}</div>`).join("")}</div>
+        <button class="btn sm" type="button" data-addrow="${k}" style="margin-top:10px">${svg("plus")}${ag ? "Add a Docker host" : "Add another Portainer"}</button>
+        <p class="muted small" style="margin:8px 0 0">${ag ? "One row per Docker host (Arr-Stack, Ubuntu-Media, Frigate LXCs, …). Keys are stored on the dashboard server and never shown again." : "One line per Portainer server. If one Portainer manages several hosts (agents/environments), one line covers all of them."}</p>`;
     } else {
       form = `<div class="cform">${c.fields.map(([f, label, type, ph]) => `<label class="f">${label}<input class="inp" name="${f}" type="${type}" autocomplete="off" value="${type === "password" ? "" : esc(v[f] || "")}" placeholder="${type === "password" && v[f] ? "saved (" + esc(v[f]) + ") — leave empty to keep" : esc(ph)}"></label>`).join("")}</div>`;
     }
@@ -552,33 +565,7 @@ async function aConnections() {
   return ah("Connections", "Connect your systems once — the dashboard keeps itself up to date. Every connection is read-only and optional. Tokens are stored on the dashboard server, never shown again, and never included in exports.") +
     `<div class="mode-card"><button class="mode-opt ${mode === "live" ? "on" : ""}" data-mode-set="live"><b>${svg("refresh").replace("<svg", '<svg style="width:16px;height:16px;vertical-align:-3px"')} Live</b><span>Use the connections below. Discovery every ${esc(S.inv.settings_public?.discovery_interval_min)} min, web checks every ${esc(S.inv.settings_public?.check_interval_min)} min.</span></button>
       <button class="mode-opt ${mode === "offline" ? "on" : ""}" data-mode-set="offline"><b>${svg("save").replace("<svg", '<svg style="width:16px;height:16px;vertical-align:-3px"')} Offline</b><span>No API calls. Use the last scan you uploaded (Backup &amp; import), and show its date.</span></button></div>` +
-    card("proxmox") + deepCard(ds) + ["portainer", "unifi", "homeassistant"].map(card).join("");
-}
-function deepCard(ds) {
-  if (ds.error) return `<div class="glass conn"><div></div><div class="note warn">Deep scan unavailable: ${esc(ds.error)}</div></div>`;
-  const st = ds.state || {}, res = st.results || [];
-  const ok = res.length && res.every((x) => x.status === "ok");
-  const badge = !ds.hosts ? '<span class="status-off">Not set up</span>' : st.running ? '<span class="status-off">Scanning…</span>'
-    : !res.length ? '<span class="status-off">Saved — not scanned yet</span>' : ok ? `<span class="status-ok">Scanned ${esc(ago(st.last))}</span>` : '<span class="status-err">Last scan had errors</span>';
-  return `<form class="glass conn" id="deepForm">${icon({ name: "Deep scan", icon: "proxmox" })}<div><h3>Deep scan — see inside every VM &amp; LXC <span class="muted small" style="font-weight:600">recommended</span> <span style="margin-left:auto">${badge}</span></h3>
-    <ul class="gives"><li>Every container, Compose stack, published port, Traefik and Caddy route — inside all VMs and LXCs</li>
-      <li>Runs automatically every ${esc(ds.interval)} min (change in Checks &amp; schedule) and whenever you click <b>Scan now</b></li>
-      <li>The dashboard's key can <b>only</b> run the read-only scan on the node — no shell, no other command, no file access</li></ul>
-    <details class="how" ${ds.hosts ? "" : "open"}><summary>How do I add this? (once, about 1 minute)</summary><ol>
-      <li>Open a shell on <b>each</b> Proxmox node (web UI → node → <b>Shell</b>) and paste this command:
-        <div style="position:relative;margin-top:8px"><pre class="mono" style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.35);padding:12px 44px 12px 12px;border-radius:12px;margin:0;font-size:11.5px;color:#e0e7ff">${esc(ds.install_command)}</pre>
-        <button type="button" class="iconbtn" data-copy="${esc(ds.install_command)}" style="position:absolute;top:6px;right:6px;width:32px;height:32px" aria-label="Copy command">${svg("copy")}</button></div>
-        It downloads the read-only scan script to <code>/usr/local/sbin/homelab-collect</code> and allows this dashboard's key to run <i>only</i> that script. It should print <code>homelab-dashboard deep scan installed</code>.</li>
-      <li>Allow the dashboard's host to reach the nodes on <b>TCP 22</b> in your firewall.</li>
-      <li>Enter the node addresses below and click <b>Save &amp; scan</b>.</li>
-</ol></details>
-    <details class="how"><summary>How do I remove it?</summary><ol><li>Here: clear the node addresses and click <b>Save &amp; scan</b> — scheduled scans stop.</li>
-      <li>On <b>each</b> Proxmox node shell, run:<pre class="mono" style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.35);padding:10px;border-radius:10px;margin:6px 0 0;font-size:11.5px;color:#e0e7ff">sed -i --follow-symlinks '/homelab-dashboard$/d' /root/.ssh/authorized_keys; rm -f /usr/local/sbin/homelab-collect</pre>The key can no longer log in and the script is gone.</li></ol></details>
-    <div class="cform"><label class="f">Proxmox node addresses<input class="inp" name="hosts" value="${esc(ds.hosts)}" placeholder="10.10.10.10, 10.10.10.11"></label>
-      <label class="f">SSH user<input class="inp" name="user" value="${esc(ds.user || "root")}"></label><label class="f">SSH port<input class="inp" name="port" value="${esc(ds.port || 22)}"></label></div>
-    <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">${svg("check")}Save &amp; scan</button>${ds.hosts ? `<button class="btn" type="button" id="deepNow">${svg("refresh")}Scan now</button>` : ""}</div>
-    <div class="result">${res.map((x) => x.status === "ok" ? `<div><span class="status-ok">✓ ${esc(x.detail)}</span></div>` : `<div style="margin-top:6px"><span class="status-err">${esc(x.error)}</span></div>`).join("")}</div>
-    <p class="muted tiny" style="margin:10px 0 0">Dashboard public key: <span class="mono" style="word-break:break-all">${esc(ds.public_key)}</span></p></div></form>`;
+    ["proxmox", "agents", "portainer", "unifi", "homeassistant"].map(card).join("");
 }
 async function aServices() {
   const apps = S.inv.apps.filter((a) => !S.admQ || (a.name + " " + a.id + " " + (a.discovered_name || "") + " " + (a.location?.host_label || "")).toLowerCase().includes(S.admQ.toLowerCase()));
@@ -644,7 +631,6 @@ async function aChecks() {
   const s = await api("/api/admin/settings"), e = S.inv.engine || {};
   return ah("Checks & schedule", "How often the dashboard looks for changes and tests every web address.") + `<form class="glass pad" id="setForm"><div class="grid-form">
     <label class="f">Refresh from Proxmox &amp; APIs every (min)<input class="inp" type="number" min="5" max="1440" name="discovery_interval_min" value="${esc(s.discovery_interval_min)}"></label>
-    <label class="f">Deep scan inside VMs &amp; LXCs every (min)<input class="inp" type="number" min="10" max="1440" name="deepscan_interval_min" value="${esc(s.deepscan_interval_min ?? 60)}"></label>
     <label class="f">Test web addresses every (min, ≥ 2)<input class="inp" type="number" min="2" max="1440" name="check_interval_min" value="${esc(s.check_interval_min)}"></label>
     <label class="f">Daily digest at (hour, 0–23)<input class="inp" type="number" min="0" max="23" name="digest_hour_local" value="${esc(s.digest_hour_local)}"></label>
     <label class="f">Warn when a certificate expires within (days)<input class="inp" type="number" min="1" max="90" name="cert_warn_days" value="${esc(s.cert_warn_days)}"></label>
@@ -689,7 +675,7 @@ function wireAdmin(root) {
   // connections
   $$("[data-mode-set]", root).forEach((b) => b.addEventListener("click", async () => { await api("/api/admin/settings", { method: "PUT", body: { mode: b.dataset.modeSet } }); toast(b.dataset.modeSet === "live" ? "Live mode" : "Offline mode"); await api("/api/admin/discover", { method: "POST", body: {} }); render(); pollEngine("discovery"); }));
   const collect = (form, k) => {
-    if (k === "portainer") return { servers: $$("[data-prow]", form).map((r) => ({ host: $('[name="host"]', r).value.trim(), token: $('[name="token"]', r).value.trim() })).filter((s) => s.host) };
+    if (k === "portainer" || k === "agents") { const sk = k === "agents" ? "key" : "token"; return { servers: $$("[data-prow]", form).map((r) => ({ host: $('[name="host"]', r).value.trim(), [sk]: $(`[name="${sk}"]`, r).value.trim() })).filter((s) => s.host) }; }
     const o = {}; $$("input", form).forEach((i) => { o[i.name] = i.value.trim(); }); return o;
   };
   const showRes = (k, res) => { const el = $(`[data-result="${k}"]`, root); if (el) el.innerHTML = res.status === "ok" ? `<span class="status-ok">✓ ${esc(res.detail || "Connected")}</span>` : `<span class="status-err">${esc(res.error || res.detail || res.status)}</span>`; };
@@ -698,28 +684,46 @@ function wireAdmin(root) {
     try { const r = await api("/api/admin/connections/" + k, { method: "PUT", body: collect(f, k) }); showRes(k, r.test); toast("Saved"); pollEngine("discovery", true); } catch (er) { showRes(k, { status: "error", error: er.message }); }
   }));
   $$("[data-test]", root).forEach((b) => b.addEventListener("click", async () => { const k = b.dataset.test; showRes(k, { status: "…", detail: "Testing…" }); try { showRes(k, await api(`/api/admin/connections/${k}/test`, { method: "POST", body: collect(b.closest("form"), k) })); } catch (er) { showRes(k, { status: "error", error: er.message }); } }));
-  const df = $("#deepForm", root);
-  if (df) {
-    const go = async (save) => {
-      const out = $(".result", df); out.innerHTML = '<span class="status-off">Scanning both nodes… this takes 1–3 minutes</span>';
-      try {
-        if (save) await api("/api/admin/connections/deepscan", { method: "PUT", body: { hosts: df.hosts.value.trim(), user: df.user.value.trim(), port: df.port.value.trim() } });
-        await api("/api/admin/deepscan/run", { method: "POST", body: {} });
-        for (let i = 0; i < 150; i++) { await new Promise((r) => setTimeout(r, 2000)); const s2 = await api("/api/status"); if (!s2.engine.deepscan.running && !s2.engine.discovery.running) break; }
-        await refresh(); toast("Deep scan finished");
-      } catch (er) { out.innerHTML = `<span class="status-err">${esc(er.message)}</span>`; }
-    };
-    df.addEventListener("submit", (e) => { e.preventDefault(); go(true); });
-    const dn = $("#deepNow", df); if (dn) dn.addEventListener("click", () => go(false));
-  }
   $$("[data-copy]", root).forEach((b) => b.addEventListener("click", () => copy(b.dataset.copy)));
   $$("[data-cdel]", root).forEach((b) => b.addEventListener("click", async () => { if (!confirm("Disconnect and delete the saved token?")) return; await api("/api/admin/connections/" + b.dataset.cdel, { method: "DELETE" }); toast("Disconnected"); render(); }));
-  const pa = $("#ptadd", root); if (pa) pa.addEventListener("click", () => {
-    const rows = $("#ptrows", root), tpl = rows.lastElementChild.cloneNode(true);
-    $$("input", tpl).forEach((i) => { i.value = ""; i.placeholder = i.name === "host" ? "10.10.40.40:9443" : "ptr_…"; });
-    $(".acts", tpl).innerHTML = ""; rows.appendChild(tpl); $('[name="host"]', tpl).focus();
-  });
-  $$("[data-prm]", root).forEach((b) => b.addEventListener("click", async () => { const f = b.closest("form"); b.closest("[data-prow]").remove(); try { await api("/api/admin/connections/portainer", { method: "PUT", body: collect(f, "portainer") }); toast("Removed"); render(); } catch (er) { toast(er.message); } }));
+  const snippet = (key) => `services:
+  homelab-agent:
+    image: ghcr.io/raadms/homelab-dashboard-agent:latest
+    container_name: homelab-agent
+    environment:
+      - AGENT_KEY=${key}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "9180:9180"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    restart: always`;
+  const wireRow = (row) => {
+    const g = $("[data-genkey]", row); if (!g) return;
+    g.addEventListener("click", () => {
+      const b = new Uint8Array(32); crypto.getRandomValues(b);
+      const key = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+      $('[name="key"]', row).value = key;
+      const sn = snippet(key);
+      $("[data-snippet]", row).innerHTML = `<div class="note" style="margin-top:10px"><b>Deploy this on ${esc($('[name="host"]', row).value || "that host")}</b> (Portainer → Stacks → Add stack → name <code>homelab-agent</code> → paste → Deploy), then click <b>Save &amp; test</b> here.
+        <div style="position:relative;margin-top:8px"><pre class="mono" style="white-space:pre;overflow-x:auto;background:rgba(0,0,0,.35);padding:12px 44px 12px 12px;border-radius:12px;margin:0;font-size:11.5px;color:#e0e7ff">${esc(sn)}</pre>
+        <button type="button" class="iconbtn" data-copysn style="position:absolute;top:6px;right:6px;width:32px;height:32px" aria-label="Copy compose snippet">${svg("copy")}</button></div></div>`;
+      $("[data-copysn]", row).addEventListener("click", () => copy(sn));
+    });
+  };
+  $$("[data-prow]", root).forEach(wireRow);
+  $$("[data-addrow]", root).forEach((pa) => pa.addEventListener("click", () => {
+    const k = pa.dataset.addrow, rows = $(`[data-rows="${k}"]`, root), tpl = rows.lastElementChild.cloneNode(true);
+    $$("input", tpl).forEach((i) => { i.value = ""; i.placeholder = i.name === "host" ? (k === "agents" ? "10.10.40.40" : "10.10.40.40:9443") : (k === "agents" ? "click Generate key" : "ptr_…"); });
+    $$("[data-prm]", tpl).forEach((x) => x.remove()); const sn = $("[data-snippet]", tpl); if (sn) sn.innerHTML = "";
+    rows.appendChild(tpl); wireRow(tpl); $('[name="host"]', tpl).focus();
+  }));
+  $$("[data-prm]", root).forEach((b) => b.addEventListener("click", async () => { const f = b.closest("form"), k = b.dataset.prm; b.closest("[data-prow]").remove(); try { await api("/api/admin/connections/" + k, { method: "PUT", body: collect(f, k) }); toast("Removed"); render(); } catch (er) { toast(er.message); } }));
   // services / hosts rows
   const aq = $("#admq", root); if (aq) aq.addEventListener("input", () => { S.admQ = aq.value; const p = aq.selectionStart; render().then(() => { const n = $("#admq"); if (n) { n.focus(); n.setSelectionRange(p, p); } }); });
   $$(".adm-row", root).forEach((row) => {
