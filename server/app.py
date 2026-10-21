@@ -639,6 +639,16 @@ def main():
         save_config(cfg)
         print(f"Admin password set for user '{cfg['admin_user']}' in {CONFIG_PATH}")
         return
+    probe = os.path.join(DATA, ".write-test")
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+    except OSError:
+        sys.exit(f"ERROR: the data folder {DATA} is not writable by user id {os.getuid()}.\n"
+                 f"On the Docker host run:  sudo chown -R {os.getuid()}:{os.getgid()} <the folder you mounted at {DATA}>\n"
+                 f"then restart the container.")
     if not os.path.exists(CONFIG_PATH):
         save_config(cfg)
     store = Store(os.path.join(DATA, "dashboard.db"))
