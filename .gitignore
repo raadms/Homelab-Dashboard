@@ -4,3 +4,4 @@ data/
 __pycache__/
 collected/
 .DS_Store
+docs/inventory/

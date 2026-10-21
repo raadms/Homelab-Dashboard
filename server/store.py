@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 DEFAULT_SETTINGS = {
-    "discovery_interval_min": 60,
+    "mode": "live",
+    "dashboard_title": "Homelab",
+    "owner_name": "",
+    "discovery_interval_min": 30,
     "check_interval_min": 5,
     "digest_hour_local": 7,
     "digest_enabled": True,
@@ -48,7 +51,7 @@ DEFAULT_SETTINGS = {
 
 # Fields a user may override on each entity type (anything else is rejected).
 OVERRIDE_FIELDS = {"name", "icon", "category", "purpose", "hidden", "disabled", "preferred_url", "order",
-                   "notes_user", "tags", "extra_endpoints", "check_disabled", "favorite", "access", "dependencies_user"}
+                   "notes_user", "tags", "extra_endpoints", "check_disabled", "favorite", "access", "dependencies_user", "confirmed"}
 
 
 def now():
@@ -101,7 +104,9 @@ class Store:
             elif isinstance(d, list):
                 v = [str(i)[:40] for i in v][:40]
             else:
-                v = str(v)[:40]
+                v = str(v)[:60]
+                if k == "mode" and v not in ("live", "offline"):
+                    raise ValueError("mode must be live or offline")
             clean[k] = v
         for k, v in clean.items():
             self.x("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, json.dumps(v)))
@@ -277,7 +282,7 @@ class Store:
 
 def _clean(k, v):
     """Bound user-supplied values; URLs must be http(s)."""
-    if k in ("hidden", "disabled", "favorite", "check_disabled"):
+    if k in ("hidden", "disabled", "favorite", "check_disabled", "confirmed"):
         return bool(v)
     if k == "order":
         return int(v)

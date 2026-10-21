@@ -28,8 +28,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import checks, discovery, merge
+from . import checks, discovery, live, merge
 from .store import Store, now
+from .vault import Vault
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.environ.get("DASH_DATA", os.path.join(ROOT, "data"))
@@ -53,6 +54,13 @@ def load_config():
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH) as f:
             cfg.update(json.load(f))
+    # Container-friendly overrides
+    if os.environ.get("DASH_PORT"):
+        cfg["port"] = int(os.environ["DASH_PORT"])
+    if os.environ.get("DASH_SECURE_COOKIE"):
+        cfg["secure_cookie"] = os.environ["DASH_SECURE_COOKIE"].lower() in ("1", "true", "yes")
+    if os.environ.get("DASH_COLLECTOR_LABEL"):
+        cfg["collector_label"] = os.environ["DASH_COLLECTOR_LABEL"]
     return cfg
 
 
@@ -111,8 +119,50 @@ class Engine:
         self.state = dict(discovery=dict(running=False, last=None, error=None),
                           checks=dict(running=False, last=None, count=0), digest=dict(last=None))
         self.label = cfg.get("collector_label") or collector_label()
+        self.vault = Vault(DATA)
+        self._import_token_files()
         self._diag_last = {}
         self._cache = None
+
+    def _import_token_files(self):
+        """One-time move of token files used before the admin UI existed into the vault."""
+        try:
+            if not self.vault.get("proxmox"):
+                t = live._read("pve_token")
+                if t:
+                    self.vault.set("proxmox", dict(token=t))
+            # The Home Assistant token file on the dev VM is an owner token for another project:
+            # deliberately NOT imported. Create a dedicated non-admin HA token in Admin → Connections.
+        except (ValueError, OSError) as e:
+            print("token import skipped:", e, flush=True)
+
+    def source_cfg(self):
+        """Credentials for discovery: Admin → Connections first, token files as fallback."""
+        v = self.vault
+        pve, por, uni, ha = v.get("proxmox"), v.get("portainer"), v.get("unifi"), v.get("homeassistant")
+        return dict(mode=self.store.settings().get("mode", "live"), collector_label=self.label,
+                    ha_url=ha.get("url") or _read_secret(self.cfg["ha_url_file"]), ha_token=ha.get("token") or _read_secret(self.cfg["ha_token_file"]),
+                    pve_token=pve.get("token"), pve_hosts=pve.get("hosts"), portainer_servers=por.get("servers"),
+                    unifi_host=uni.get("host"), unifi_key=uni.get("key"), unifi_site=uni.get("site"))
+
+    def test_connection(self, name):
+        """Run one connector now and report the result (never returns secrets)."""
+        c = self.source_cfg()
+        if name == "proxmox":
+            from .discovery import ROOT
+            seed = json.load(open(os.path.join(ROOT, "config", "seed.json")))
+            hosts = [h.strip() for h in (c.get("pve_hosts") or "").split(",") if h.strip()] or [n["ip"] for n in seed.get("proxmox_nodes", [])]
+            st, _ = live.proxmox(hosts, c["pve_token"])
+        elif name == "portainer":
+            st, _ = live.portainer(c["portainer_servers"])
+        elif name == "unifi":
+            st, _ = live.unifi(c["unifi_host"], c["unifi_key"], c["unifi_site"] or "default")
+        elif name == "homeassistant":
+            r = discovery.source_home_assistant(c)
+            st = dict(status=r.get("status"), error=r.get("error"), detail=f"{len(r.get('clients', []))} network clients, {len(r.get('addons', []))} add-ons" if r.get("status") == "ok" else None)
+        else:
+            raise KeyError(name)
+        return {k: v for k, v in st.items() if k in ("status", "detail", "error")}
 
     def inventory(self):
         if self._cache is None:
@@ -131,8 +181,7 @@ class Engine:
             return False
         self.state["discovery"]["running"] = True
         try:
-            cfg = dict(ha_url=_read_secret(self.cfg["ha_url_file"]), ha_token=_read_secret(self.cfg["ha_token_file"]),
-                       collector_label=self.label)
+            cfg = self.source_cfg()
             inv = discovery.build(cfg, DATA)
             _, prev = self.store.snapshot(0)
             self.store.save_snapshot(inv)
@@ -331,7 +380,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.static(path)
             if method != "GET" and not self.csrf_ok():
                 return self.err(403, "missing X-Dashboard header")
-            if self.store.settings()["require_login_for_view"] and not self.is_admin() and path not in ("/api/login", "/api/me"):
+            if self.store.settings()["require_login_for_view"] and not self.is_admin() and path not in ("/api/login", "/api/me", "/api/setup"):
                 return self.err(401, "login required")
             return self.route(method, path, qs)
         except (ValueError, json.JSONDecodeError) as e:
@@ -349,8 +398,21 @@ class Handler(BaseHTTPRequestHandler):
         # -------------------------------------------------- public (read-only)
         if method == "GET" and path == "/api/inventory":
             return self.json(E.merged())
+        if method == "POST" and path == "/api/setup":
+            # First run only: create the admin account from the browser (no command line needed).
+            if self.cfg.get("admin_pw_hash"):
+                return self.err(409, "admin account already exists")
+            b = self.body_json()
+            user, pw = str(b.get("username") or "admin").strip()[:40], str(b.get("password") or "")
+            if len(pw) < 10 or not re.match(r"^[\w.@-]{3,40}$", user):
+                raise ValueError("username 3–40 letters/digits, password at least 10 characters")
+            self.cfg.update(admin_user=user, admin_pw_hash=hash_pw(pw))
+            save_config(self.cfg)
+            tok = S.new_session()
+            flags = "HttpOnly; SameSite=Strict; Path=/; Max-Age=43200" + ("; Secure" if self.cfg.get("secure_cookie") else "")
+            return self.json(dict(ok=True), extra={"Set-Cookie": f"dash_session={tok}; {flags}"})
         if method == "GET" and path == "/api/me":
-            return self.json(dict(admin=self.is_admin(), password_set=bool(self.cfg.get("admin_pw_hash")),
+            return self.json(dict(admin=self.is_admin(), password_set=bool(self.cfg.get("admin_pw_hash")), user=self.cfg.get("admin_user") if self.is_admin() else None,
                                   require_login_for_view=S.settings()["require_login_for_view"]))
         if method == "GET" and path == "/api/status":
             return self.json(dict(engine=E.state, collector=E.label, snapshots=S.snapshot_count()))
@@ -413,6 +475,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(dict(started=True))
         if method == "POST" and path == "/api/admin/digest":
             return self.json(E.digest("on-demand"))
+        if method == "GET" and path == "/api/admin/connections":
+            srcs = {(x.get("name") or "").split(" ")[0].lower(): x for x in (E.inventory() or {}).get("sources", [])}
+            pub = E.vault.public()
+            last = dict(proxmox=srcs.get("proxmox"), portainer=srcs.get("portainer"), unifi=srcs.get("unifi"), homeassistant=srcs.get("home"))
+            return self.json(dict(connections={k: dict(v, last={kk: vv for kk, vv in (last.get(k) or {}).items() if kk in ("status", "detail", "error", "at")})
+                                               for k, v in pub.items()}, mode=S.settings().get("mode", "live")))
+        m = re.match(r"^/api/admin/connections/(\w+)(/test)?$", path)
+        if m:
+            name, test = m.group(1), m.group(2)
+            if test and method == "POST":
+                return self.json(E.test_connection(name))
+            if method == "PUT":
+                E.vault.set(name, self.body_json())
+                threading.Thread(target=E.discover, daemon=True).start()
+                return self.json(dict(ok=True, test=E.test_connection(name)))
+            if method == "DELETE":
+                E.vault.delete(name)
+                threading.Thread(target=E.discover, daemon=True).start()
+                return self.json(dict(ok=True))
+        if method == "PUT" and path == "/api/admin/password":
+            b = self.body_json()
+            if not check_pw(str(b.get("current", "")), self.cfg.get("admin_pw_hash")):
+                return self.err(403, "current password is wrong")
+            if len(str(b.get("new", ""))) < 10:
+                raise ValueError("new password must be at least 10 characters")
+            self.cfg["admin_pw_hash"] = hash_pw(str(b["new"]))
+            save_config(self.cfg)
+            S.x("DELETE FROM sessions")  # log out every other device
+            tok = S.new_session()
+            flags = "HttpOnly; SameSite=Strict; Path=/; Max-Age=43200" + ("; Secure" if self.cfg.get("secure_cookie") else "")
+            return self.json(dict(ok=True), extra={"Set-Cookie": f"dash_session={tok}; {flags}"})
         if method == "GET" and path == "/api/admin/settings":
             return self.json(S.settings())
         if method == "PUT" and path == "/api/admin/settings":
@@ -504,6 +597,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def static(self, path):
+        if path == "/collect-proxmox.sh":
+            with open(os.path.join(ROOT, "collectors", "dist", "collect-proxmox.sh"), "rb") as f:
+                body = f.read()
+            self._headers(200, "text/x-shellscript; charset=utf-8", len(body), {"Content-Disposition": "attachment; filename=collect-proxmox.sh"})
+            self.wfile.write(body)
+            return
         if path in ("", "/"):
             path = "/index.html"
         full = os.path.realpath(os.path.join(WEB, path.lstrip("/")))

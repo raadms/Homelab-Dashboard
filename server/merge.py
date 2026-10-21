@@ -63,6 +63,7 @@ def merged(store, inv):
         a["hidden"] = o.get("hidden", a0.get("default_hidden", False))
         a["disabled"] = o.get("disabled", False)
         a["favorite"] = o.get("favorite", False)
+        a["confirmed"] = o.get("confirmed", False)
         a["notes_user"] = o.get("notes_user")
         eps = [dict(e) for e in a0.get("endpoints", [])]
         for u in o.get("extra_endpoints", []):
@@ -130,7 +131,8 @@ def merged(store, inv):
     out = dict(inv, apps=apps, devices=devices, workloads=workloads, settings_public=dict(
         default_access_mode=settings["default_access_mode"], categories_order=settings["categories_order"],
         check_interval_min=settings["check_interval_min"], discovery_interval_min=settings["discovery_interval_min"],
-        cert_warn_days=settings["cert_warn_days"]))
+        cert_warn_days=settings["cert_warn_days"], dashboard_title=settings.get("dashboard_title", "Homelab"),
+        owner_name=settings.get("owner_name", ""), mode=settings.get("mode", "live")))
     out["issues"] = list(inv.get("issues", [])) + health_issues(apps, settings)
     ids = {a["id"] for a in apps} | {al for a in apps for al in a.get("aliases", [])} | {d["id"] for d in devices} | {w["id"] for w in workloads} | {n["id"] for n in inv.get("nodes", [])}
     out["orphan_overrides"] = [k for k in ov if k not in ids]

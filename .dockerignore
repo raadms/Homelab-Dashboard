@@ -1,0 +1,10 @@
+.git
+.claude
+data
+collected
+docs
+tests
+**/__pycache__
+*.tar.gz
+web/mockup.*
+web/concepts.*

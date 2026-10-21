@@ -1,0 +1,42 @@
+# Homelab dashboard behind Traefik.
+# 1. Copy this file and .env.example (as .env) to the Docker host that runs Traefik.
+# 2. Adjust .env, then:  docker compose up -d
+# 3. Open https://<DASH_HOST>/#/admin and create the admin account.
+services:
+  homelab-dashboard:
+    image: ${DASH_IMAGE:-ghcr.io/OWNER/homelab-dashboard:latest}
+    container_name: homelab-dashboard
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Riyadh}
+      DASH_SECURE_COOKIE: "1"          # served over HTTPS by Traefik
+      DASH_COLLECTOR_LABEL: ${DASH_COLLECTOR_LABEL:-dashboard container}
+    volumes:
+      - dashboard-data:/data           # database, settings, saved tokens, uploaded scans
+    networks: [proxy]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 256m
+    cpus: 0.5
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.homelab-dashboard.entrypoints=http
+      - traefik.http.routers.homelab-dashboard.rule=Host(`${DASH_HOST:-dashbard.safrani.co}`)
+      - traefik.http.middlewares.homelab-dashboard-https.redirectscheme.scheme=https
+      - traefik.http.routers.homelab-dashboard.middlewares=homelab-dashboard-https
+      - traefik.http.routers.homelab-dashboard-secure.entrypoints=https
+      - traefik.http.routers.homelab-dashboard-secure.rule=Host(`${DASH_HOST:-dashbard.safrani.co}`)
+      - traefik.http.routers.homelab-dashboard-secure.tls=true
+      - traefik.http.routers.homelab-dashboard-secure.tls.certresolver=${CERT_RESOLVER:-cloudflare}
+      - traefik.http.routers.homelab-dashboard-secure.service=homelab-dashboard
+      - traefik.http.services.homelab-dashboard.loadbalancer.server.port=8088
+      - com.centurylinklabs.watchtower.enable=true
+
+volumes:
+  dashboard-data:
+
+networks:
+  proxy:
+    external: true

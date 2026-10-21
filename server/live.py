@@ -59,9 +59,9 @@ def _err(e):
 
 # ======================================================================= Proxmox
 
-def proxmox(node_ips):
+def proxmox(node_ips, token=None):
     """Return (status dict, [runs]) where each run looks like a collect-proxmox run."""
-    tok = _read("pve_token")
+    tok = token or _read("pve_token")
     if not tok:
         return dict(name="Proxmox API", status="not-configured", detail=f"no token in {TOKEN_DIR}/pve_token"), []
     if not re.match(r"^[\w.@-]+![\w.-]+=[0-9a-f-]{36}$", tok):
@@ -123,9 +123,9 @@ def _port_str(ports):
     return ", ".join(out)
 
 
-def portainer():
+def portainer(servers=None):
     """Return (status dict, {host_ip: dict(at, containers, source)})."""
-    raw = _read("portainer_tokens")
+    raw = "\n".join(f"{x['host']}={x['token']}" for x in servers) if servers else _read("portainer_tokens")
     if not raw:
         return dict(name="Portainer API", status="not-configured", detail=f"no tokens in {TOKEN_DIR}/portainer_tokens"), {}
     hosts, errs, at = {}, [], now()
@@ -200,3 +200,35 @@ def merge_runs(script_runs, api_runs, docker_hosts):
             out.append(dict(collector="guest", hostname=ip, at=h["at"], ips=[dict(ip=ip)], containers=h["containers"],
                             listeners=[], services=[], proxy_routes=[], failed=[], live=True))
     return out
+
+
+# ======================================================================= UniFi
+
+def unifi(host, key, site="default"):
+    """Read-only UniFi Network API (X-API-KEY). Returns (status, run-like dict for discovery)."""
+    if not key:
+        return dict(name="UniFi API", status="not-configured", detail="no API key"), None
+    host = host or "10.10.1.1"
+    base = f"https://{host}/proxy/network"
+    hdr = {"X-API-KEY": key}
+    out, errs = {}, []
+    for name, path in (("api_rest_networkconf", f"/api/s/{site}/rest/networkconf"), ("api_stat_sta", f"/api/s/{site}/stat/sta"),
+                       ("api_rest_user", f"/api/s/{site}/rest/user"), ("v2_static_dns", f"/v2/api/site/{site}/static-dns")):
+        try:
+            data = _get(base + path, hdr)
+            if name == "api_rest_networkconf":  # drop Wi-Fi/VPN secrets before they go anywhere
+                for n in data.get("data", []):
+                    for k in list(n):
+                        if re.search(r"pass|psk|secret|key|x_", k, re.I):
+                            n.pop(k)
+            out[name] = data
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"{path.split('/')[-1]}: {_err(e)}")
+    if not out:
+        return dict(name="UniFi API", status="error", error="; ".join(errs)[:300]), None
+    at = now()
+    nets = len((out.get("api_rest_networkconf") or {}).get("data") or [])
+    users = len((out.get("api_rest_user") or {}).get("data") or [])
+    return (dict(name="UniFi API (read-only)", status="ok" if not errs else "partial", at=at, error="; ".join(errs)[:300] or None,
+                 detail=f"{nets} networks, {users} known clients"),
+            dict(collector="unifi", hostname=host, at=at, live=True, unifi=out, failed=[]))

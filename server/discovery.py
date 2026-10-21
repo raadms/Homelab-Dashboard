@@ -973,7 +973,8 @@ def build(cfg, data_dir):
     suffix = seed.get("domain_suffix")
     started = now()
 
-    ha = source_home_assistant(cfg)
+    offline = cfg.get("mode") == "offline"
+    ha = dict(status="not-configured") if offline else source_home_assistant(cfg)
     b.sources.append(dict(name="Home Assistant (UniFi integration, add-ons)", status=ha.get("status"), at=ha.get("at") or started, error=ha.get("error"),
                           detail=f"{len(ha.get('clients', []))} clients, {len(ha.get('addons', []))} add-ons" if ha.get("status") == "ok" else None))
     if ha.get("status") == "ok":
@@ -981,6 +982,11 @@ def build(cfg, data_dir):
 
     extracted = extract_incoming(os.path.join(data_dir, "incoming"), os.path.join(data_dir, "extracted"))
     col = source_collected(extracted)
+    if not offline:
+        ust, urun = live.unifi(cfg.get("unifi_host"), cfg.get("unifi_key"), cfg.get("unifi_site") or "default")
+        b.sources.append(ust)
+        if urun:
+            col["runs"] = [r for r in col["runs"] if r["collector"] != "unifi"] + [urun]
     unifi_runs = [r for r in col["runs"] if r["collector"] == "unifi"]
     for r in unifi_runs:
         u = r["unifi"]
@@ -1004,9 +1010,14 @@ def build(cfg, data_dir):
                 b.unifi_dns = getattr(b, "unifi_dns", []) + [dict(name=rec["key"], type=rec.get("record_type"), value=rec.get("value"), enabled=rec.get("enabled"))]
     b.sources.append(dict(name="Collector results (imported)", status=col["status"], at=started,
                           detail=f"{len(col['runs'])} runs: " + ", ".join(f"{r['collector']}@{r['hostname']}" for r in col["runs"])))
-    pst, api_runs = live.proxmox([n["ip"] for n in seed.get("proxmox_nodes", [])])
-    dst, docker_hosts = live.portainer()
-    b.sources += [pst, dst]
+    if offline:
+        pst = dict(name="Live APIs", status="off", detail="Offline mode: using the last imported scan only")
+        api_runs, docker_hosts, dst = [], {}, None
+    else:
+        hosts = [h.strip() for h in (cfg.get("pve_hosts") or "").split(",") if h.strip()] or [n["ip"] for n in seed.get("proxmox_nodes", [])]
+        pst, api_runs = live.proxmox(hosts, cfg.get("pve_token"))
+        dst, docker_hosts = live.portainer(cfg.get("portainer_servers"))
+    b.sources += [x for x in (pst, dst) if x]
     col["runs"] = live.merge_runs(col["runs"], api_runs, docker_hosts)
     b.add_seed_nodes()
     for r in col["runs"]:
