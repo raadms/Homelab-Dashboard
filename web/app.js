@@ -526,7 +526,9 @@ async function aConnections() {
       const servers = (v.servers || []).concat([{ host: "", hint: "" }]);
       form = `<div id="ptrows">${servers.map((s, i) => `<div class="cform" data-prow><label class="f">Portainer address<input class="inp" name="host" value="${esc(s.host)}" placeholder="10.10.30.30:9443"></label>
         <label class="f">Access token<input class="inp" name="token" type="password" placeholder="${s.hint ? "saved (" + esc(s.hint) + ") — leave empty to keep" : "ptr_…"}" autocomplete="off"></label>
-        <div class="acts">${s.host ? `<button class="btn sm danger" data-prm="${i}" type="button">${svg("trash")}Remove</button>` : ""}</div></div>`).join("")}</div>`;
+        <div class="acts">${s.host ? `<button class="btn sm danger" data-prm="${i}" type="button">${svg("trash")}Remove</button>` : ""}</div></div>`).join("")}</div>
+        <button class="btn sm" type="button" id="ptadd" style="margin-top:10px">${svg("plus")}Add another Portainer</button>
+        <p class="muted small" style="margin:8px 0 0">One line per Portainer server. If one Portainer already manages several hosts (agents/environments), one line covers all of them.</p>`;
     } else {
       form = `<div class="cform">${c.fields.map(([f, label, type, ph]) => `<label class="f">${label}<input class="inp" name="${f}" type="${type}" autocomplete="off" value="${type === "password" ? "" : esc(v[f] || "")}" placeholder="${type === "password" && v[f] ? "saved (" + esc(v[f]) + ") — leave empty to keep" : esc(ph)}"></label>`).join("")}</div>`;
     }
@@ -659,6 +661,11 @@ function wireAdmin(root) {
   }));
   $$("[data-test]", root).forEach((b) => b.addEventListener("click", async () => { const k = b.dataset.test; showRes(k, { status: "…", detail: "Testing…" }); try { showRes(k, await api(`/api/admin/connections/${k}/test`, { method: "POST", body: collect(b.closest("form"), k) })); } catch (er) { showRes(k, { status: "error", error: er.message }); } }));
   $$("[data-cdel]", root).forEach((b) => b.addEventListener("click", async () => { if (!confirm("Disconnect and delete the saved token?")) return; await api("/api/admin/connections/" + b.dataset.cdel, { method: "DELETE" }); toast("Disconnected"); render(); }));
+  const pa = $("#ptadd", root); if (pa) pa.addEventListener("click", () => {
+    const rows = $("#ptrows", root), tpl = rows.lastElementChild.cloneNode(true);
+    $$("input", tpl).forEach((i) => { i.value = ""; i.placeholder = i.name === "host" ? "10.10.40.40:9443" : "ptr_…"; });
+    $(".acts", tpl).innerHTML = ""; rows.appendChild(tpl); $('[name="host"]', tpl).focus();
+  });
   $$("[data-prm]", root).forEach((b) => b.addEventListener("click", async () => { const f = b.closest("form"); b.closest("[data-prow]").remove(); try { await api("/api/admin/connections/portainer", { method: "PUT", body: collect(f, "portainer") }); toast("Removed"); render(); } catch (er) { toast(er.message); } }));
   // services / hosts rows
   const aq = $("#admq", root); if (aq) aq.addEventListener("input", () => { S.admQ = aq.value; const p = aq.selectionStart; render().then(() => { const n = $("#admq"); if (n) { n.focus(); n.setSelectionRange(p, p); } }); });
