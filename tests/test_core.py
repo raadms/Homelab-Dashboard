@@ -142,7 +142,7 @@ class EndToEnd(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self._tokdir, live.TOKEN_DIR = live.TOKEN_DIR, os.path.join(self.tmp, "no-tokens")  # never call real APIs in tests
-        ext = os.path.join(self.tmp, "extracted")
+        ext = os.path.join(self.tmp, "stage")
 
         def run(name, files, meta):
             d = os.path.join(ext, name)
@@ -166,6 +166,12 @@ class EndToEnd(unittest.TestCase):
         }, dict(collector="proxmox", hostname="pve", collected_at_utc="20261019T100000Z"))
         run("guest-proxy-1", {"ip_addr": "eth0 UP 50.50.50.10/24", "caddy_caddyfile": CADDYFILE, "listening": SS},
             dict(collector="guest", hostname="proxy", collected_at_utc="20261019T100000Z"))
+        # package the fixtures the way real uploads arrive
+        import tarfile
+        os.makedirs(os.path.join(self.tmp, "incoming"))
+        for name in os.listdir(ext):
+            with tarfile.open(os.path.join(self.tmp, "incoming", name + ".tar.gz"), "w:gz") as t:
+                t.add(os.path.join(ext, name), arcname=name)
         self.cfg = {}
 
     def tearDown(self):

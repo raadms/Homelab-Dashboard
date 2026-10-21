@@ -15,6 +15,7 @@ FIELDS = {
     "proxmox": {"token": r"^[\w.@-]+![\w.-]+=[0-9a-f-]{36}$", "hosts": r"^[\w.:\-, ]{0,300}$"},
     "portainer": {"servers": None},  # list of {host, token}
     "unifi": {"host": r"^[\w.:\-]{1,120}$", "key": r"^[\w\-]{8,200}$", "site": r"^[\w\-]{1,40}$"},
+    "deepscan": {"hosts": r"^[\w.:\-, ]{0,300}$", "user": r"^[a-z_][a-z0-9_-]{0,31}$", "port": r"^\d{1,5}$"},
     "homeassistant": {"url": r"^https?://[\w.:\-/]{3,200}$", "token": r"^[\w.\-]{20,400}$"},
 }
 SECRET_KEYS = {"token", "key"}
@@ -97,6 +98,7 @@ class Vault:
             if name == "portainer":
                 out[name] = dict(configured=bool(v.get("servers")), servers=[dict(host=s["host"], hint="…" + s["token"][-4:]) for s in v.get("servers", [])])
             else:
-                out[name] = dict(configured=all(v.get(k) for k in SECRET_KEYS & set(FIELDS[name])) and bool(v),
+                req = SECRET_KEYS & set(FIELDS[name]) or {"hosts"}
+                out[name] = dict(configured=all(v.get(k) for k in req) and bool(v),
                                  **{k: (("…" + v[k][-4:]) if k in SECRET_KEYS else v[k]) for k in v if v.get(k)})
         return out

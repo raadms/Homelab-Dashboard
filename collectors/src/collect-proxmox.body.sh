@@ -5,9 +5,15 @@
 # Running Linux VMs with the QEMU guest agent are inspected the same way via
 # `qm guest exec`; VMs without the agent are listed with their config only.
 #
+# Dashboard deep scan: `collect-proxmox.sh --stdout` writes the .tar.gz to stdout
+# (used as the forced command of the dashboard's SSH key; see docs/DEEP-SCAN.md).
+#
 # Options (env): SKIP_LXC_EXEC=1 / SKIP_VM_EXEC=1 to not run anything inside guests.
 #                CMD_TIMEOUT=20 per-command timeout in seconds.
 
+if [ "${1:-}" = "--stdout" ]; then
+  STDOUT_MODE=1; OUTDIR="$(mktemp -d /tmp/homelab-scan.XXXXXX)"; exec 3>&1 1>&2
+fi
 init_out proxmox
 
 run pveversion pveversion -v

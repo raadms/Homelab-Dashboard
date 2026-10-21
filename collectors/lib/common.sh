@@ -126,6 +126,12 @@ collect_proxies() {
 
 finish() {
   local tarball="$OUT.tar.gz"
+  if [ "${STDOUT_MODE:-0}" = 1 ]; then
+    # Called by the dashboard over SSH: stream the result, leave nothing behind.
+    tar -czf - -C "$(dirname "$OUT")" "$(basename "$OUT")" 2>/dev/null >&3
+    rm -rf "$(dirname "$OUT")"
+    return 0
+  fi
   tar -czf "$tarball" -C "$(dirname "$OUT")" "$(basename "$OUT")" 2>/dev/null && \
     echo "[collector] done: $tarball" >&2 && echo "$tarball"
 }

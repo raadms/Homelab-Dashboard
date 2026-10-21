@@ -38,6 +38,7 @@ DEFAULT_SETTINGS = {
     "dashboard_title": "Homelab",
     "owner_name": "",
     "discovery_interval_min": 30,
+    "deepscan_interval_min": 60,
     "check_interval_min": 5,
     "digest_hour_local": 7,
     "digest_enabled": True,

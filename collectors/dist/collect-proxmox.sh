@@ -129,6 +129,12 @@ collect_proxies() {
 
 finish() {
   local tarball="$OUT.tar.gz"
+  if [ "${STDOUT_MODE:-0}" = 1 ]; then
+    # Called by the dashboard over SSH: stream the result, leave nothing behind.
+    tar -czf - -C "$(dirname "$OUT")" "$(basename "$OUT")" 2>/dev/null >&3
+    rm -rf "$(dirname "$OUT")"
+    return 0
+  fi
   tar -czf "$tarball" -C "$(dirname "$OUT")" "$(basename "$OUT")" 2>/dev/null && \
     echo "[collector] done: $tarball" >&2 && echo "$tarball"
 }
@@ -140,9 +146,15 @@ finish() {
 # Running Linux VMs with the QEMU guest agent are inspected the same way via
 # `qm guest exec`; VMs without the agent are listed with their config only.
 #
+# Dashboard deep scan: `collect-proxmox.sh --stdout` writes the .tar.gz to stdout
+# (used as the forced command of the dashboard's SSH key; see docs/DEEP-SCAN.md).
+#
 # Options (env): SKIP_LXC_EXEC=1 / SKIP_VM_EXEC=1 to not run anything inside guests.
 #                CMD_TIMEOUT=20 per-command timeout in seconds.
 
+if [ "${1:-}" = "--stdout" ]; then
+  STDOUT_MODE=1; OUTDIR="$(mktemp -d /tmp/homelab-scan.XXXXXX)"; exec 3>&1 1>&2
+fi
 init_out proxmox
 
 run pveversion pveversion -v

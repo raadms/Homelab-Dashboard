@@ -125,6 +125,9 @@ def source_dns(names):
 
 def extract_incoming(incoming, extracted):
     """Unpack collector tarballs (safely) into collected/extracted/."""
+    # Re-extract from scratch each run so scans that were pruned or replaced disappear.
+    import shutil
+    shutil.rmtree(extracted, ignore_errors=True)
     os.makedirs(extracted, exist_ok=True)
     for tgz in sorted(glob.glob(os.path.join(incoming, "*.tar.gz"))):
         try:

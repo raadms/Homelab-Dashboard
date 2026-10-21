@@ -28,7 +28,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import checks, discovery, live, merge
+from . import checks, deepscan, discovery, live, merge
 from .store import Store, now
 from .vault import Vault
 
@@ -36,6 +36,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.environ.get("DASH_DATA", os.path.join(ROOT, "data"))
 WEB = os.path.join(ROOT, "web")
 CONFIG_PATH = os.path.join(DATA, "config.json")
+
+COLLECTOR_URL = os.environ.get("DASH_COLLECTOR_URL", "https://raw.githubusercontent.com/raadms/Homelab-Dashboard/main/collectors/dist/collect-proxmox.sh")
 
 DEFAULT_CONFIG = {
     "listen": "0.0.0.0",
@@ -117,7 +119,8 @@ class Engine:
         self.store, self.cfg = store, cfg
         self.lock = threading.Lock()
         self.state = dict(discovery=dict(running=False, last=None, error=None),
-                          checks=dict(running=False, last=None, count=0), digest=dict(last=None))
+                          checks=dict(running=False, last=None, count=0), digest=dict(last=None),
+                          deepscan=dict(running=False, last=None, results=[]))
         self.label = cfg.get("collector_label") or collector_label()
         self.vault = Vault(DATA)
         self._import_token_files()
@@ -266,6 +269,25 @@ class Engine:
             res["proxy_tcp"] = checks.tcp(e["proxy_ip"], 443)
         return res
 
+    def deepscan_hosts(self):
+        v = self.vault.get("deepscan")
+        return [h.strip() for h in (v.get("hosts") or "").split(",") if h.strip()], v.get("user") or "root", int(v.get("port") or 22)
+
+    def run_deepscan(self, then_discover=True):
+        hosts, user, port = self.deepscan_hosts()
+        if not hosts or self.state["deepscan"]["running"]:
+            return False
+        self.state["deepscan"]["running"] = True
+        try:
+            with ThreadPoolExecutor(4) as ex:
+                res = list(ex.map(lambda h: deepscan.scan_host(DATA, h, user, port), hosts))
+            self.state["deepscan"].update(last=now(), results=[{k: r[k] for k in r if k in ("status", "detail", "error")} for r in res])
+        finally:
+            self.state["deepscan"]["running"] = False
+        if then_discover:
+            self.discover()
+        return True
+
     def digest(self, kind="on-demand"):
         d = merge.build_digest(self.store, self.merged(), kind=kind)
         d["id"] = self.store.save_digest(kind, d)
@@ -273,7 +295,7 @@ class Engine:
         return d
 
     def scheduler(self):
-        last_disc = last_chk = 0.0
+        last_disc = last_chk = last_scan = 0.0
         if self.inventory() is None:
             self.discover()
             last_disc = time.time()
@@ -281,6 +303,10 @@ class Engine:
             try:
                 s = self.store.settings()
                 t = time.time()
+                if s.get("mode") != "offline" and self.deepscan_hosts()[0] and t - last_scan >= s.get("deepscan_interval_min", 60) * 60:
+                    last_scan = t
+                    self.run_deepscan(then_discover=False)
+                    last_disc = 0  # import the fresh scan right away
                 if t - last_disc >= s["discovery_interval_min"] * 60:
                     last_disc = t
                     self.discover()
@@ -510,6 +536,15 @@ class Handler(BaseHTTPRequestHandler):
                 E.vault.delete(name)
                 threading.Thread(target=E.discover, daemon=True).start()
                 return self.json(dict(ok=True))
+        if method == "GET" and path == "/api/admin/deepscan":
+            pub = deepscan.ensure_key(DATA)
+            hosts, user, port = E.deepscan_hosts()
+            return self.json(dict(public_key=pub, install_command=deepscan.install_command(pub, COLLECTOR_URL), script_url=COLLECTOR_URL,
+                                  hosts=", ".join(hosts), user=user, port=port, state=E.state["deepscan"],
+                                  interval=S.settings().get("deepscan_interval_min", 60)))
+        if method == "POST" and path == "/api/admin/deepscan/run":
+            threading.Thread(target=E.run_deepscan, daemon=True).start()
+            return self.json(dict(started=True))
         if method == "PUT" and path == "/api/admin/password":
             b = self.body_json()
             if not check_pw(str(b.get("current", "")), self.cfg.get("admin_pw_hash")):
