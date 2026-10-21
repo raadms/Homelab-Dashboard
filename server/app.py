@@ -145,9 +145,25 @@ class Engine:
                     pve_token=pve.get("token"), pve_hosts=pve.get("hosts"), portainer_servers=por.get("servers"),
                     unifi_host=uni.get("host"), unifi_key=uni.get("key"), unifi_site=uni.get("site"))
 
-    def test_connection(self, name):
-        """Run one connector now and report the result (never returns secrets)."""
+    def test_connection(self, name, typed=None):
+        """Run one connector now and report the result (never returns secrets).
+        Values typed in the form but not saved yet are tested as-is (and not stored)."""
         c = self.source_cfg()
+        t = {k: str(v).strip() for k, v in (typed or {}).items() if isinstance(v, str) and str(v).strip()}
+        if name == "proxmox":
+            c["pve_token"] = t.get("token") or c["pve_token"]
+            c["pve_hosts"] = t.get("hosts") or c["pve_hosts"]
+            if not c["pve_token"]:
+                return dict(status="not-configured", error="No Proxmox token yet — paste it in the API token box, then click Save & test.")
+        elif name == "unifi":
+            c["unifi_key"] = t.get("key") or c["unifi_key"]
+            c["unifi_host"] = t.get("host") or c["unifi_host"]
+        elif name == "homeassistant":
+            c["ha_url"] = t.get("url") or c["ha_url"]
+            c["ha_token"] = t.get("token") or c["ha_token"]
+        elif name == "portainer" and (typed or {}).get("servers"):
+            saved = {x["host"]: x["token"] for x in (c["portainer_servers"] or [])}
+            c["portainer_servers"] = [dict(host=x["host"], token=x.get("token") or saved.get(x["host"], "")) for x in typed["servers"] if x.get("host")]
         if name == "proxmox":
             from .discovery import ROOT
             seed = json.load(open(os.path.join(ROOT, "config", "seed.json")))
@@ -485,7 +501,7 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             name, test = m.group(1), m.group(2)
             if test and method == "POST":
-                return self.json(E.test_connection(name))
+                return self.json(E.test_connection(name, self.body_json()))
             if method == "PUT":
                 E.vault.set(name, self.body_json())
                 threading.Thread(target=E.discover, daemon=True).start()

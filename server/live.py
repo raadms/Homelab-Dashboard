@@ -63,9 +63,9 @@ def proxmox(node_ips, token=None):
     """Return (status dict, [runs]) where each run looks like a collect-proxmox run."""
     tok = token or _read("pve_token")
     if not tok:
-        return dict(name="Proxmox API", status="not-configured", detail=f"no token in {TOKEN_DIR}/pve_token"), []
+        return dict(name="Proxmox API", status="not-configured", detail="No Proxmox token saved yet (Admin → Connections)"), []
     if not re.match(r"^[\w.@-]+![\w.-]+=[0-9a-f-]{36}$", tok):
-        return dict(name="Proxmox API", status="error", error="pve_token must look like user@realm!tokenid=<uuid>"), []
+        return dict(name="Proxmox API", status="error", error="The token must look like dashboard@pve!dash=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"), []
     hdr = {"Authorization": "PVEAPIToken=" + tok}
     last_err = None
     for ip in node_ips:
@@ -127,7 +127,7 @@ def portainer(servers=None):
     """Return (status dict, {host_ip: dict(at, containers, source)})."""
     raw = "\n".join(f"{x['host']}={x['token']}" for x in servers) if servers else _read("portainer_tokens")
     if not raw:
-        return dict(name="Portainer API", status="not-configured", detail=f"no tokens in {TOKEN_DIR}/portainer_tokens"), {}
+        return dict(name="Portainer API", status="not-configured", detail="No Portainer servers saved yet (Admin → Connections)"), {}
     hosts, errs, at = {}, [], now()
     for line in raw.splitlines():
         line = line.strip()

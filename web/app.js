@@ -657,7 +657,7 @@ function wireAdmin(root) {
     e.preventDefault(); const k = f.dataset.conn; showRes(k, { status: "…", detail: "Saving and testing…" });
     try { const r = await api("/api/admin/connections/" + k, { method: "PUT", body: collect(f, k) }); showRes(k, r.test); toast("Saved"); pollEngine("discovery", true); } catch (er) { showRes(k, { status: "error", error: er.message }); }
   }));
-  $$("[data-test]", root).forEach((b) => b.addEventListener("click", async () => { const k = b.dataset.test; showRes(k, { status: "…", detail: "Testing…" }); try { showRes(k, await api(`/api/admin/connections/${k}/test`, { method: "POST", body: {} })); } catch (er) { showRes(k, { status: "error", error: er.message }); } }));
+  $$("[data-test]", root).forEach((b) => b.addEventListener("click", async () => { const k = b.dataset.test; showRes(k, { status: "…", detail: "Testing…" }); try { showRes(k, await api(`/api/admin/connections/${k}/test`, { method: "POST", body: collect(b.closest("form"), k) })); } catch (er) { showRes(k, { status: "error", error: er.message }); } }));
   $$("[data-cdel]", root).forEach((b) => b.addEventListener("click", async () => { if (!confirm("Disconnect and delete the saved token?")) return; await api("/api/admin/connections/" + b.dataset.cdel, { method: "DELETE" }); toast("Disconnected"); render(); }));
   $$("[data-prm]", root).forEach((b) => b.addEventListener("click", async () => { const f = b.closest("form"); b.closest("[data-prow]").remove(); try { await api("/api/admin/connections/portainer", { method: "PUT", body: collect(f, "portainer") }); toast("Removed"); render(); } catch (er) { toast(er.message); } }));
   // services / hosts rows
