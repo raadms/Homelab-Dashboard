@@ -4,7 +4,7 @@
 # 3. Open https://<DASH_HOST>/#/admin and create the admin account.
 services:
   homelab-dashboard:
-    image: ${DASH_IMAGE:-ghcr.io/OWNER/homelab-dashboard:latest}
+    image: ${DASH_IMAGE:-ghcr.io/raadms/homelab-dashboard:latest}
     container_name: homelab-dashboard
     restart: unless-stopped
     environment:
